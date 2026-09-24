@@ -1,10 +1,29 @@
 import type { Env } from "./types";
-import { sendMessage } from "./telegram";
-import { getToken, getSiteInfo, getAssignments, getAnnouncements, getUserCourseIds } from "./moodle";
+import { sendMessage, type ReplyKeyboard } from "./telegram";
+import { getToken, getSiteInfo, getAssignments, getAnnouncements, getUserCourseIds, type MoodleAuth } from "./moodle";
 // @ts-ignore - bundled as raw text via wrangler's Text module rule
 import connectHtml from "./connect.html";
 
 const CODE_TTL_SECONDS = 10 * 60;
+
+const MENU_KEYBOARD: ReplyKeyboard = {
+  keyboard: [["📚 Assignments", "📢 Announcements"], ["ℹ️ Status"]],
+  resize_keyboard: true,
+};
+
+interface UserRow {
+  chat_id: number;
+  moodle_url: string;
+  token: string;
+  moodle_user_id: number;
+  full_name: string;
+}
+
+async function getUser(env: Env, chatId: number): Promise<UserRow | null> {
+  return env.DB.prepare("SELECT chat_id, moodle_url, token, moodle_user_id, full_name FROM users WHERE chat_id = ?")
+    .bind(chatId)
+    .first<UserRow>();
+}
 
 function randomCode(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
@@ -26,6 +45,60 @@ function isValidMoodleUrl(input: string): boolean {
   }
 }
 
+async function sendConnectLink(env: Env, chatId: number) {
+  const code = randomCode();
+  const expiresAt = Math.floor(Date.now() / 1000) + CODE_TTL_SECONDS;
+  await env.DB.prepare("INSERT INTO link_codes (code, chat_id, expires_at) VALUES (?, ?, ?)")
+    .bind(code, chatId, expiresAt)
+    .run();
+  const link = `${env.PUBLIC_URL}/connect?code=${code}`;
+  await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, `Connect your Moodle account here (link valid 10 minutes):\n${link}`);
+}
+
+function formatAssignment(a: { name: string; courseName: string; duedate: number }): string {
+  const due = a.duedate ? new Date(a.duedate * 1000).toLocaleString() : "no due date";
+  return `📚 <b>${escapeHtml(a.courseName)}</b>\n${escapeHtml(a.name)}\nDue: ${due}`;
+}
+
+function formatAnnouncement(an: { subject: string; courseName: string }): string {
+  return `📢 <b>${escapeHtml(an.courseName)}</b>\n${escapeHtml(an.subject)}`;
+}
+
+async function sendAssignmentsList(env: Env, user: UserRow) {
+  const auth: MoodleAuth = { moodleUrl: user.moodle_url, token: user.token };
+  const assignments = await getAssignments(auth);
+  if (assignments.length === 0) {
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, "No assignments found.");
+    return;
+  }
+  assignments.sort((a, b) => (a.duedate || Infinity) - (b.duedate || Infinity));
+  for (const a of assignments.slice(0, 20)) {
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, formatAssignment(a));
+  }
+}
+
+async function sendAnnouncementsList(env: Env, user: UserRow) {
+  const auth: MoodleAuth = { moodleUrl: user.moodle_url, token: user.token };
+  const courseIds = await getUserCourseIds(auth, user.moodle_user_id);
+  const announcements = await getAnnouncements(auth, courseIds);
+  if (announcements.length === 0) {
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, "No announcements found.");
+    return;
+  }
+  for (const an of announcements.slice(0, 20)) {
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, formatAnnouncement(an));
+  }
+}
+
+const HELP_TEXT =
+  "Commands:\n" +
+  "/start – connect or reconnect your Moodle account\n" +
+  "/assignments – list your current assignments\n" +
+  "/announcements – list recent course announcements\n" +
+  "/status – show your connected account\n" +
+  "/help – show this message\n\n" +
+  "You'll also get a message automatically whenever a new assignment or announcement appears.";
+
 async function handleWebhook(req: Request, env: Env): Promise<Response> {
   if (req.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.TELEGRAM_WEBHOOK_SECRET) {
     return new Response("forbidden", { status: 403 });
@@ -34,21 +107,42 @@ async function handleWebhook(req: Request, env: Env): Promise<Response> {
   const msg = update.message;
   if (!msg?.text || !msg.chat?.id) return new Response("ok");
   const chatId = msg.chat.id as number;
+  const text = msg.text.trim();
 
-  if (msg.text.startsWith("/start")) {
-    const code = randomCode();
-    const expiresAt = Math.floor(Date.now() / 1000) + CODE_TTL_SECONDS;
-    await env.DB.prepare("INSERT INTO link_codes (code, chat_id, expires_at) VALUES (?, ?, ?)")
-      .bind(code, chatId, expiresAt)
-      .run();
-    const link = `${env.PUBLIC_URL}/connect?code=${code}`;
+  if (text.startsWith("/start")) {
+    const existing = await getUser(env, chatId);
+    if (existing) {
+      await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, `Already connected as ${escapeHtml(existing.full_name)}.`, MENU_KEYBOARD);
+    } else {
+      await sendConnectLink(env, chatId);
+    }
+    return new Response("ok");
+  }
+
+  if (text === "/help") {
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, HELP_TEXT);
+    return new Response("ok");
+  }
+
+  const user = await getUser(env, chatId);
+  if (!user) {
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, "You're not connected yet. Send /start to connect your Moodle account.");
+    return new Response("ok");
+  }
+
+  if (text === "/assignments" || text === "📚 Assignments") {
+    await sendAssignmentsList(env, user);
+  } else if (text === "/announcements" || text === "📢 Announcements") {
+    await sendAnnouncementsList(env, user);
+  } else if (text === "/status" || text === "ℹ️ Status") {
     await sendMessage(
       env.TELEGRAM_BOT_TOKEN,
       chatId,
-      `Welcome! Connect your Moodle account here (link valid 10 minutes):\n${link}`
+      `Connected as <b>${escapeHtml(user.full_name)}</b>\nMoodle site: ${escapeHtml(user.moodle_url)}`,
+      MENU_KEYBOARD
     );
   } else {
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, "Send /start to connect your Moodle account.");
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, HELP_TEXT, MENU_KEYBOARD);
   }
   return new Response("ok");
 }
@@ -89,7 +183,12 @@ async function handleApiConnect(req: Request, env: Env): Promise<Response> {
     .bind(row.chat_id, moodleUrl, token, site.userid, site.fullname, Math.floor(Date.now() / 1000))
     .run();
 
-  await sendMessage(env.TELEGRAM_BOT_TOKEN, row.chat_id, `Connected as ${escapeHtml(site.fullname)}. You'll get notified about new assignments and announcements.`);
+  await sendMessage(
+    env.TELEGRAM_BOT_TOKEN,
+    row.chat_id,
+    `Connected as ${escapeHtml(site.fullname)}. You'll get notified about new assignments and announcements.`,
+    MENU_KEYBOARD
+  );
 
   return Response.json({ ok: true });
 }
@@ -111,12 +210,7 @@ async function checkUser(env: Env, user: { chat_id: number; moodle_url: string; 
     await env.DB.prepare("INSERT INTO seen_items (chat_id, item_type, item_id) VALUES (?, 'assignment', ?)")
       .bind(user.chat_id, a.id)
       .run();
-    const due = a.duedate ? new Date(a.duedate * 1000).toLocaleString() : "no due date";
-    await sendMessage(
-      env.TELEGRAM_BOT_TOKEN,
-      user.chat_id,
-      `📚 New assignment in <b>${escapeHtml(a.courseName)}</b>\n${escapeHtml(a.name)}\nDue: ${due}`
-    );
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, `New assignment!\n${formatAssignment(a)}`);
   }
 
   for (const an of announcements) {
@@ -127,11 +221,7 @@ async function checkUser(env: Env, user: { chat_id: number; moodle_url: string; 
     await env.DB.prepare("INSERT INTO seen_items (chat_id, item_type, item_id) VALUES (?, 'announcement', ?)")
       .bind(user.chat_id, an.id)
       .run();
-    await sendMessage(
-      env.TELEGRAM_BOT_TOKEN,
-      user.chat_id,
-      `📢 New announcement in <b>${escapeHtml(an.courseName)}</b>\n${escapeHtml(an.subject)}`
-    );
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, `New announcement!\n${formatAnnouncement(an)}`);
   }
 }
 

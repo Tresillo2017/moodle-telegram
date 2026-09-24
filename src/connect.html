@@ -5,34 +5,151 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Connect your Moodle account</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 420px; margin: 40px auto; padding: 0 16px; color: #222; }
-  h1 { font-size: 1.3rem; }
-  label { display: block; margin-top: 14px; font-size: 0.9rem; font-weight: 600; }
-  input { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; font-size: 1rem; }
-  button { margin-top: 20px; width: 100%; padding: 10px; font-size: 1rem; cursor: pointer; }
-  #msg { margin-top: 16px; font-size: 0.9rem; }
+  :root {
+    --bg: #f4f5f7;
+    --card: #ffffff;
+    --text: #1c1e21;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --accent: #2563eb;
+    --accent-dark: #1d4ed8;
+    --error-bg: #fef2f2;
+    --error-text: #b91c1c;
+    --success-bg: #f0fdf4;
+    --success-text: #15803d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --card: #171a21;
+      --text: #f2f3f5;
+      --muted: #9aa1ac;
+      --border: #2a2e37;
+      --accent: #3b82f6;
+      --accent-dark: #2563eb;
+      --error-bg: #2a1414;
+      --error-text: #f87171;
+      --success-bg: #10261a;
+      --success-text: #4ade80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px 28px;
+    max-width: 400px;
+    width: 100%;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  }
+  .icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    margin-bottom: 16px;
+  }
+  h1 {
+    font-size: 1.25rem;
+    margin: 0 0 8px;
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 0.9rem;
+    line-height: 1.4;
+    margin: 0 0 24px;
+  }
+  label {
+    display: block;
+    margin-top: 16px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  input {
+    width: 100%;
+    padding: 10px 12px;
+    margin-top: 6px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.95rem;
+    background: var(--bg);
+    color: var(--text);
+  }
+  input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  button {
+    margin-top: 24px;
+    width: 100%;
+    padding: 12px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: white;
+    background: var(--accent);
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  button:hover { background: var(--accent-dark); }
+  button:disabled { opacity: 0.6; cursor: default; }
+  #msg {
+    margin-top: 16px;
+    font-size: 0.85rem;
+    padding: 10px 12px;
+    border-radius: 8px;
+    display: none;
+  }
+  #msg.error { display: block; background: var(--error-bg); color: var(--error-text); }
+  #msg.success { display: block; background: var(--success-bg); color: var(--success-text); }
 </style>
 </head>
 <body>
-<h1>Connect your Moodle account</h1>
-<p>Your password is sent once to verify against your Moodle site and is never stored — only a Moodle access token is kept.</p>
-<form id="f">
-  <label>Moodle site URL</label>
-  <input name="moodleUrl" placeholder="https://moodle.myschool.edu" required>
-  <label>Username</label>
-  <input name="username" required>
-  <label>Password</label>
-  <input name="password" type="password" required>
-  <button type="submit">Connect</button>
-</form>
-<div id="msg"></div>
+<div class="card">
+  <div class="icon">🎓</div>
+  <h1>Connect your Moodle account</h1>
+  <p class="subtitle">Your password is sent once to verify against your Moodle site and is never stored — only a Moodle access token is kept.</p>
+  <form id="f">
+    <label>Moodle site URL</label>
+    <input name="moodleUrl" type="url" placeholder="https://moodle.myschool.edu" required>
+    <label>Username</label>
+    <input name="username" autocomplete="username" required>
+    <label>Password</label>
+    <input name="password" type="password" autocomplete="current-password" required>
+    <button type="submit" id="submitBtn">Connect</button>
+  </form>
+  <div id="msg"></div>
+</div>
 <script>
   const params = new URLSearchParams(location.search);
   const code = params.get("code");
-  document.getElementById("f").addEventListener("submit", async (e) => {
+  const form = document.getElementById("f");
+  const btn = document.getElementById("submitBtn");
+  const msg = document.getElementById("msg");
+
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const msg = document.getElementById("msg");
-    msg.textContent = "Connecting...";
+    msg.className = "";
+    btn.disabled = true;
+    btn.textContent = "Connecting...";
     const fd = new FormData(e.target);
     try {
       const res = await fetch("/api/connect", {
@@ -48,9 +165,14 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed");
       msg.textContent = "Connected! Go back to Telegram.";
-      e.target.reset();
+      msg.className = "success";
+      form.reset();
+      btn.textContent = "Connected";
     } catch (err) {
       msg.textContent = "Error: " + err.message;
+      msg.className = "error";
+      btn.disabled = false;
+      btn.textContent = "Connect";
     }
   });
 </script>
