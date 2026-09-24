@@ -5,20 +5,20 @@ Telegram bot that notifies users of new Moodle assignments and announcements, fo
 ## Setup
 
 1. Create a Telegram bot via [@BotFather](https://t.me/BotFather), grab the token.
-2. Install deps: `npm install`
+2. Install deps: `bun install`
 3. Create the D1 database:
    ```
-   npx wrangler d1 create moodle-telegram
+   bunx wrangler d1 create moodle-telegram
    ```
    Copy the `database_id` into `wrangler.toml`.
 4. Apply the schema:
    ```
-   npx wrangler d1 execute moodle-telegram --file=schema.sql --remote
+   bunx wrangler d1 execute moodle-telegram --file=schema.sql --remote
    ```
 5. Set secrets:
    ```
-   npx wrangler secret put TELEGRAM_BOT_TOKEN
-   npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
+   bunx wrangler secret put TELEGRAM_BOT_TOKEN
+   bunx wrangler secret put TELEGRAM_WEBHOOK_SECRET
    ```
    `TELEGRAM_WEBHOOK_SECRET` can be any random string you generate yourself (e.g. `openssl rand -hex 32`) — it's used to verify incoming webhook calls actually come from Telegram.
 6. Set `PUBLIC_URL` in `wrangler.toml` `[vars]` to your Worker's URL (get it after first deploy, then redeploy), e.g.:
@@ -28,7 +28,7 @@ Telegram bot that notifies users of new Moodle assignments and announcements, fo
    ```
 7. Deploy:
    ```
-   npm run deploy
+   bun run deploy
    ```
 8. Register the Telegram webhook, passing the same secret so Telegram sends it back on every call:
    ```
