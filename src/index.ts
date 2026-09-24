@@ -10,7 +10,26 @@ function randomCode(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 }
 
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function isValidMoodleUrl(input: string): boolean {
+  try {
+    const u = new URL(input);
+    return u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 async function handleWebhook(req: Request, env: Env): Promise<Response> {
+  if (req.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.TELEGRAM_WEBHOOK_SECRET) {
+    return new Response("forbidden", { status: 403 });
+  }
   const update: any = await req.json();
   const msg = update.message;
   if (!msg?.text || !msg.chat?.id) return new Response("ok");
@@ -40,8 +59,13 @@ async function handleApiConnect(req: Request, env: Env): Promise<Response> {
   if (!code || !moodleUrl || !username || !password) {
     return Response.json({ error: "Missing fields" }, { status: 400 });
   }
+  if (!isValidMoodleUrl(moodleUrl)) {
+    return Response.json({ error: "Moodle URL must be a valid https:// URL" }, { status: 400 });
+  }
 
-  const row = await env.DB.prepare("SELECT chat_id, expires_at FROM link_codes WHERE code = ?")
+  // Delete-and-return makes the code single-use: a second request with the
+  // same code (replay, or a race) finds no row and is rejected.
+  const row = await env.DB.prepare("DELETE FROM link_codes WHERE code = ? RETURNING chat_id, expires_at")
     .bind(code)
     .first<{ chat_id: number; expires_at: number }>();
   if (!row || row.expires_at < Math.floor(Date.now() / 1000)) {
@@ -65,9 +89,7 @@ async function handleApiConnect(req: Request, env: Env): Promise<Response> {
     .bind(row.chat_id, moodleUrl, token, site.userid, site.fullname, Math.floor(Date.now() / 1000))
     .run();
 
-  await env.DB.prepare("DELETE FROM link_codes WHERE code = ?").bind(code).run();
-
-  await sendMessage(env.TELEGRAM_BOT_TOKEN, row.chat_id, `Connected as ${site.fullname}. You'll get notified about new assignments and announcements.`);
+  await sendMessage(env.TELEGRAM_BOT_TOKEN, row.chat_id, `Connected as ${escapeHtml(site.fullname)}. You'll get notified about new assignments and announcements.`);
 
   return Response.json({ ok: true });
 }
@@ -90,7 +112,11 @@ async function checkUser(env: Env, user: { chat_id: number; moodle_url: string; 
       .bind(user.chat_id, a.id)
       .run();
     const due = a.duedate ? new Date(a.duedate * 1000).toLocaleString() : "no due date";
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, `📚 New assignment in <b>${a.courseName}</b>\n${a.name}\nDue: ${due}`);
+    await sendMessage(
+      env.TELEGRAM_BOT_TOKEN,
+      user.chat_id,
+      `📚 New assignment in <b>${escapeHtml(a.courseName)}</b>\n${escapeHtml(a.name)}\nDue: ${due}`
+    );
   }
 
   for (const an of announcements) {
@@ -101,7 +127,11 @@ async function checkUser(env: Env, user: { chat_id: number; moodle_url: string; 
     await env.DB.prepare("INSERT INTO seen_items (chat_id, item_type, item_id) VALUES (?, 'announcement', ?)")
       .bind(user.chat_id, an.id)
       .run();
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, `📢 New announcement in <b>${an.courseName}</b>\n${an.subject}`);
+    await sendMessage(
+      env.TELEGRAM_BOT_TOKEN,
+      user.chat_id,
+      `📢 New announcement in <b>${escapeHtml(an.courseName)}</b>\n${escapeHtml(an.subject)}`
+    );
   }
 }
 

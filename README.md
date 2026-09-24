@@ -18,7 +18,9 @@ Telegram bot that notifies users of new Moodle assignments and announcements, fo
 5. Set secrets:
    ```
    npx wrangler secret put TELEGRAM_BOT_TOKEN
+   npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
    ```
+   `TELEGRAM_WEBHOOK_SECRET` can be any random string you generate yourself (e.g. `openssl rand -hex 32`) — it's used to verify incoming webhook calls actually come from Telegram.
 6. Set `PUBLIC_URL` in `wrangler.toml` `[vars]` to your Worker's URL (get it after first deploy, then redeploy), e.g.:
    ```toml
    [vars]
@@ -28,9 +30,9 @@ Telegram bot that notifies users of new Moodle assignments and announcements, fo
    ```
    npm run deploy
    ```
-8. Register the Telegram webhook:
+8. Register the Telegram webhook, passing the same secret so Telegram sends it back on every call:
    ```
-   curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<your-worker>.workers.dev/webhook"
+   curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<your-worker>.workers.dev/webhook&secret_token=<TELEGRAM_WEBHOOK_SECRET>"
    ```
 
 ## Flow
