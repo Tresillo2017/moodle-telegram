@@ -5,7 +5,7 @@ import {
   getSiteInfo,
   getAssignments,
   getAnnouncements,
-  getUserCourseIds,
+  getActiveCourseIds,
   filterUnsubmitted,
   type MoodleAuth,
   type Assignment,
@@ -116,7 +116,8 @@ async function sendChunks(env: Env, chatId: number, loadingMessageId: number | n
 async function sendAssignmentsList(env: Env, user: UserRow) {
   const loadingId = await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, "⏳ Fetching your assignments...");
   const auth: MoodleAuth = { moodleUrl: user.moodle_url, token: user.token };
-  const allAssignments = await getAssignments(auth);
+  const activeCourseIds = await getActiveCourseIds(auth, user.moodle_user_id);
+  const allAssignments = await getAssignments(auth, activeCourseIds);
   const assignments = await filterUnsubmitted(auth, user.moodle_user_id, allAssignments);
 
   if (assignments.length === 0) {
@@ -142,8 +143,8 @@ async function sendAssignmentsList(env: Env, user: UserRow) {
 async function sendAnnouncementsList(env: Env, user: UserRow) {
   const loadingId = await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, "⏳ Fetching your announcements...");
   const auth: MoodleAuth = { moodleUrl: user.moodle_url, token: user.token };
-  const courseIds = await getUserCourseIds(auth, user.moodle_user_id);
-  const announcements = await getAnnouncements(auth, courseIds);
+  const activeCourseIds = await getActiveCourseIds(auth, user.moodle_user_id);
+  const announcements = await getAnnouncements(auth, [...activeCourseIds]);
 
   if (announcements.length === 0) {
     const text = "No announcements found.";
@@ -267,12 +268,10 @@ async function handleApiConnect(req: Request, env: Env): Promise<Response> {
 async function checkUser(env: Env, user: { chat_id: number; moodle_url: string; token: string; moodle_user_id: number }) {
   const auth = { moodleUrl: user.moodle_url, token: user.token };
 
-  const [allAssignments, courseIds] = await Promise.all([
-    getAssignments(auth),
-    getUserCourseIds(auth, user.moodle_user_id),
-  ]);
+  const activeCourseIds = await getActiveCourseIds(auth, user.moodle_user_id);
+  const allAssignments = await getAssignments(auth, activeCourseIds);
   const assignments = await filterUnsubmitted(auth, user.moodle_user_id, allAssignments);
-  const announcements = await getAnnouncements(auth, courseIds);
+  const announcements = await getAnnouncements(auth, [...activeCourseIds]);
 
   for (const a of assignments) {
     const seen = await env.DB.prepare("SELECT 1 FROM seen_items WHERE chat_id = ? AND item_type = 'assignment' AND item_id = ?")

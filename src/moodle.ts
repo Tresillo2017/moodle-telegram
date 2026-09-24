@@ -38,10 +38,11 @@ export interface Assignment {
   url: string;
 }
 
-export async function getAssignments(auth: MoodleAuth): Promise<Assignment[]> {
+export async function getAssignments(auth: MoodleAuth, activeCourseIds?: Set<number>): Promise<Assignment[]> {
   const data = await callMoodle(auth, "mod_assign_get_assignments");
   const out: Assignment[] = [];
   for (const course of data.courses ?? []) {
+    if (activeCourseIds && !activeCourseIds.has(course.id)) continue;
     for (const a of course.assignments ?? []) {
       const url = new URL("/mod/assign/view.php", auth.moodleUrl);
       url.searchParams.set("id", String(a.cmid));
@@ -69,9 +70,13 @@ export async function filterUnsubmitted(
   return assignments.filter((_, i) => !flags[i]);
 }
 
-export async function getUserCourseIds(auth: MoodleAuth, userId: number): Promise<number[]> {
+// A course counts as an "old project" once its end date has passed. Courses
+// with no end date (enddate === 0) are treated as ongoing.
+export async function getActiveCourseIds(auth: MoodleAuth, userId: number): Promise<Set<number>> {
   const data = await callMoodle(auth, "core_enrol_get_users_courses", { userid: String(userId) });
-  return (data ?? []).map((c: any) => c.id);
+  const now = Date.now() / 1000;
+  const active = (data ?? []).filter((c: any) => c.visible !== 0 && (!c.enddate || c.enddate > now));
+  return new Set(active.map((c: any) => c.id));
 }
 
 export interface Announcement {
