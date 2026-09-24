@@ -1,6 +1,15 @@
 import type { Env } from "./types";
-import { sendMessage, type ReplyKeyboard } from "./telegram";
-import { getToken, getSiteInfo, getAssignments, getAnnouncements, getUserCourseIds, type MoodleAuth } from "./moodle";
+import { sendMessage, editMessageText, type ReplyKeyboard } from "./telegram";
+import {
+  getToken,
+  getSiteInfo,
+  getAssignments,
+  getAnnouncements,
+  getUserCourseIds,
+  type MoodleAuth,
+  type Assignment,
+  type Announcement,
+} from "./moodle";
 // @ts-ignore - bundled as raw text via wrangler's Text module rule
 import connectHtml from "./connect.html";
 
@@ -55,39 +64,99 @@ async function sendConnectLink(env: Env, chatId: number) {
   await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, `Connect your Moodle account here (link valid 10 minutes):\n${link}`);
 }
 
-function formatAssignment(a: { name: string; courseName: string; duedate: number }): string {
+function formatAssignmentPush(a: Assignment): string {
   const due = a.duedate ? new Date(a.duedate * 1000).toLocaleString() : "no due date";
-  return `📚 <b>${escapeHtml(a.courseName)}</b>\n${escapeHtml(a.name)}\nDue: ${due}`;
+  return `📚 New assignment in <b>${escapeHtml(a.courseName)}</b>\n<a href="${a.url}">${escapeHtml(a.name)}</a>\nDue: ${due}`;
 }
 
-function formatAnnouncement(an: { subject: string; courseName: string }): string {
-  return `📢 <b>${escapeHtml(an.courseName)}</b>\n${escapeHtml(an.subject)}`;
+function formatAnnouncementPush(an: Announcement): string {
+  return `📢 New announcement in <b>${escapeHtml(an.courseName)}</b>\n<a href="${an.url}">${escapeHtml(an.subject)}</a>`;
+}
+
+function groupByCourse<T extends { courseName: string }>(items: T[]): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const list = groups.get(item.courseName) ?? [];
+    list.push(item);
+    groups.set(item.courseName, list);
+  }
+  return new Map([...groups.entries()].sort((a, b) => a[0].localeCompare(b[0])));
+}
+
+const MAX_CHUNK_LENGTH = 3500;
+
+function chunkBlocks(blocks: string[]): string[] {
+  const chunks: string[] = [];
+  let current = "";
+  for (const block of blocks) {
+    const candidate = current ? `${current}\n\n${block}` : block;
+    if (candidate.length > MAX_CHUNK_LENGTH && current) {
+      chunks.push(current);
+      current = block;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+async function sendChunks(env: Env, chatId: number, loadingMessageId: number | null, chunks: string[]) {
+  if (loadingMessageId !== null) {
+    await editMessageText(env.TELEGRAM_BOT_TOKEN, chatId, loadingMessageId, chunks[0]);
+  } else {
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, chunks[0]);
+  }
+  for (const chunk of chunks.slice(1)) {
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, chunk);
+  }
 }
 
 async function sendAssignmentsList(env: Env, user: UserRow) {
+  const loadingId = await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, "⏳ Fetching your assignments...");
   const auth: MoodleAuth = { moodleUrl: user.moodle_url, token: user.token };
   const assignments = await getAssignments(auth);
+
   if (assignments.length === 0) {
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, "No assignments found.");
+    const text = "No assignments found.";
+    if (loadingId !== null) await editMessageText(env.TELEGRAM_BOT_TOKEN, user.chat_id, loadingId, text);
+    else await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, text);
     return;
   }
-  assignments.sort((a, b) => (a.duedate || Infinity) - (b.duedate || Infinity));
-  for (const a of assignments.slice(0, 20)) {
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, formatAssignment(a));
+
+  const groups = groupByCourse(assignments);
+  const blocks: string[] = [];
+  for (const [courseName, items] of groups) {
+    items.sort((a, b) => (a.duedate || Infinity) - (b.duedate || Infinity));
+    const lines = items.map((a) => {
+      const due = a.duedate ? new Date(a.duedate * 1000).toLocaleString() : "no due date";
+      return `• <a href="${a.url}">${escapeHtml(a.name)}</a> — Due: ${due}`;
+    });
+    blocks.push(`<b>📘 ${escapeHtml(courseName)}</b>\n${lines.join("\n")}`);
   }
+  await sendChunks(env, user.chat_id, loadingId, chunkBlocks(blocks));
 }
 
 async function sendAnnouncementsList(env: Env, user: UserRow) {
+  const loadingId = await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, "⏳ Fetching your announcements...");
   const auth: MoodleAuth = { moodleUrl: user.moodle_url, token: user.token };
   const courseIds = await getUserCourseIds(auth, user.moodle_user_id);
   const announcements = await getAnnouncements(auth, courseIds);
+
   if (announcements.length === 0) {
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, "No announcements found.");
+    const text = "No announcements found.";
+    if (loadingId !== null) await editMessageText(env.TELEGRAM_BOT_TOKEN, user.chat_id, loadingId, text);
+    else await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, text);
     return;
   }
-  for (const an of announcements.slice(0, 20)) {
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, formatAnnouncement(an));
+
+  const groups = groupByCourse(announcements);
+  const blocks: string[] = [];
+  for (const [courseName, items] of groups) {
+    const lines = items.map((an) => `• <a href="${an.url}">${escapeHtml(an.subject)}</a>`);
+    blocks.push(`<b>📘 ${escapeHtml(courseName)}</b>\n${lines.join("\n")}`);
   }
+  await sendChunks(env, user.chat_id, loadingId, chunkBlocks(blocks));
 }
 
 const HELP_TEXT =
@@ -210,7 +279,7 @@ async function checkUser(env: Env, user: { chat_id: number; moodle_url: string; 
     await env.DB.prepare("INSERT INTO seen_items (chat_id, item_type, item_id) VALUES (?, 'assignment', ?)")
       .bind(user.chat_id, a.id)
       .run();
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, `New assignment!\n${formatAssignment(a)}`);
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, formatAssignmentPush(a));
   }
 
   for (const an of announcements) {
@@ -221,7 +290,7 @@ async function checkUser(env: Env, user: { chat_id: number; moodle_url: string; 
     await env.DB.prepare("INSERT INTO seen_items (chat_id, item_type, item_id) VALUES (?, 'announcement', ?)")
       .bind(user.chat_id, an.id)
       .run();
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, `New announcement!\n${formatAnnouncement(an)}`);
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, formatAnnouncementPush(an));
   }
 }
 

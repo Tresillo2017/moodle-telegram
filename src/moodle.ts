@@ -35,6 +35,7 @@ export interface Assignment {
   name: string;
   duedate: number;
   courseName: string;
+  url: string;
 }
 
 export async function getAssignments(auth: MoodleAuth): Promise<Assignment[]> {
@@ -42,7 +43,9 @@ export async function getAssignments(auth: MoodleAuth): Promise<Assignment[]> {
   const out: Assignment[] = [];
   for (const course of data.courses ?? []) {
     for (const a of course.assignments ?? []) {
-      out.push({ id: a.id, name: a.name, duedate: a.duedate, courseName: course.fullname });
+      const url = new URL("/mod/assign/view.php", auth.moodleUrl);
+      url.searchParams.set("id", String(a.cmid));
+      out.push({ id: a.id, name: a.name, duedate: a.duedate, courseName: course.fullname, url: url.toString() });
     }
   }
   return out;
@@ -57,6 +60,7 @@ export interface Announcement {
   id: number;
   subject: string;
   courseName: string;
+  url: string;
 }
 
 export async function getAnnouncements(auth: MoodleAuth, courseIds: number[]): Promise<Announcement[]> {
@@ -69,7 +73,10 @@ export async function getAnnouncements(auth: MoodleAuth, courseIds: number[]): P
   for (const forum of newsForums) {
     const disc = await callMoodle(auth, "mod_forum_get_forum_discussions", { forumid: String(forum.id) });
     for (const d of disc.discussions ?? []) {
-      out.push({ id: d.discussion ?? d.id, subject: d.subject, courseName: forum.course_fullname ?? "" });
+      const discussionId = d.discussion ?? d.id;
+      const url = new URL("/mod/forum/discuss.php", auth.moodleUrl);
+      url.searchParams.set("d", String(discussionId));
+      out.push({ id: discussionId, subject: d.subject, courseName: forum.course_fullname ?? "", url: url.toString() });
     }
   }
   return out;
