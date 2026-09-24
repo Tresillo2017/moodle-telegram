@@ -1,0 +1,19 @@
+name = "moodle-telegram"
+main = "src/index.ts"
+compatibility_date = "2024-09-01"
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+PUBLIC_URL = "https://moodle-telegram.<your-subdomain>.workers.dev"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "moodle-telegram"
+database_id = "REPLACE_WITH_WRANGLER_D1_CREATE_OUTPUT"
