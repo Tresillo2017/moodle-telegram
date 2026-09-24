@@ -6,6 +6,7 @@ import {
   getAssignments,
   getAnnouncements,
   getUserCourseIds,
+  filterUnsubmitted,
   type MoodleAuth,
   type Assignment,
   type Announcement,
@@ -115,10 +116,11 @@ async function sendChunks(env: Env, chatId: number, loadingMessageId: number | n
 async function sendAssignmentsList(env: Env, user: UserRow) {
   const loadingId = await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, "⏳ Fetching your assignments...");
   const auth: MoodleAuth = { moodleUrl: user.moodle_url, token: user.token };
-  const assignments = await getAssignments(auth);
+  const allAssignments = await getAssignments(auth);
+  const assignments = await filterUnsubmitted(auth, user.moodle_user_id, allAssignments);
 
   if (assignments.length === 0) {
-    const text = "No assignments found.";
+    const text = "No pending assignments — you're all caught up.";
     if (loadingId !== null) await editMessageText(env.TELEGRAM_BOT_TOKEN, user.chat_id, loadingId, text);
     else await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, text);
     return;
@@ -265,10 +267,11 @@ async function handleApiConnect(req: Request, env: Env): Promise<Response> {
 async function checkUser(env: Env, user: { chat_id: number; moodle_url: string; token: string; moodle_user_id: number }) {
   const auth = { moodleUrl: user.moodle_url, token: user.token };
 
-  const [assignments, courseIds] = await Promise.all([
+  const [allAssignments, courseIds] = await Promise.all([
     getAssignments(auth),
     getUserCourseIds(auth, user.moodle_user_id),
   ]);
+  const assignments = await filterUnsubmitted(auth, user.moodle_user_id, allAssignments);
   const announcements = await getAnnouncements(auth, courseIds);
 
   for (const a of assignments) {

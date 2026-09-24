@@ -51,6 +51,24 @@ export async function getAssignments(auth: MoodleAuth): Promise<Assignment[]> {
   return out;
 }
 
+async function isSubmitted(auth: MoodleAuth, assignmentId: number, userId: number): Promise<boolean> {
+  const data = await callMoodle(auth, "mod_assign_get_submission_status", {
+    assignid: String(assignmentId),
+    userid: String(userId),
+  });
+  const status = data?.lastattempt?.submission?.status ?? data?.lastattempt?.teamsubmission?.status;
+  return status === "submitted";
+}
+
+export async function filterUnsubmitted(
+  auth: MoodleAuth,
+  userId: number,
+  assignments: Assignment[]
+): Promise<Assignment[]> {
+  const flags = await Promise.all(assignments.map((a) => isSubmitted(auth, a.id, userId)));
+  return assignments.filter((_, i) => !flags[i]);
+}
+
 export async function getUserCourseIds(auth: MoodleAuth, userId: number): Promise<number[]> {
   const data = await callMoodle(auth, "core_enrol_get_users_courses", { userid: String(userId) });
   return (data ?? []).map((c: any) => c.id);
