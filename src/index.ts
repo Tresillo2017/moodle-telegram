@@ -169,7 +169,8 @@ const HELP_TEXT =
   "/announcements – list recent course announcements\n" +
   "/status – show your connected account\n" +
   "/help – show this message\n\n" +
-  "You'll also get a message automatically whenever a new assignment or announcement appears.";
+  "You'll also get a message automatically whenever a new assignment or announcement appears, " +
+  "plus a reminder 24 hours and 1 hour before an unsubmitted assignment is due.";
 
 async function handleWebhook(req: Request, env: Env): Promise<Response> {
   if (req.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.TELEGRAM_WEBHOOK_SECRET) {
@@ -265,6 +266,35 @@ async function handleApiConnect(req: Request, env: Env): Promise<Response> {
   return Response.json({ ok: true });
 }
 
+const REMINDER_THRESHOLDS: { type: string; label: string; seconds: number }[] = [
+  { type: "reminder_24h", label: "⏰ Due in less than 24 hours", seconds: 24 * 3600 },
+  { type: "reminder_1h", label: "🚨 Due in less than 1 hour", seconds: 3600 },
+];
+
+async function sendDueReminders(env: Env, chatId: number, assignments: Assignment[]) {
+  const now = Date.now() / 1000;
+  for (const a of assignments) {
+    if (!a.duedate || a.duedate <= now) continue;
+    const remaining = a.duedate - now;
+    for (const threshold of REMINDER_THRESHOLDS) {
+      if (remaining > threshold.seconds) continue;
+      const seen = await env.DB.prepare("SELECT 1 FROM seen_items WHERE chat_id = ? AND item_type = ? AND item_id = ?")
+        .bind(chatId, threshold.type, a.id)
+        .first();
+      if (seen) continue;
+      await env.DB.prepare("INSERT INTO seen_items (chat_id, item_type, item_id) VALUES (?, ?, ?)")
+        .bind(chatId, threshold.type, a.id)
+        .run();
+      const due = new Date(a.duedate * 1000).toLocaleString();
+      await sendMessage(
+        env.TELEGRAM_BOT_TOKEN,
+        chatId,
+        `${threshold.label}\n<b>${escapeHtml(a.courseName)}</b>\n<a href="${a.url}">${escapeHtml(a.name)}</a>\nDue: ${due}`
+      );
+    }
+  }
+}
+
 async function checkUser(env: Env, user: { chat_id: number; moodle_url: string; token: string; moodle_user_id: number }) {
   const auth = { moodleUrl: user.moodle_url, token: user.token };
 
@@ -283,6 +313,8 @@ async function checkUser(env: Env, user: { chat_id: number; moodle_url: string; 
       .run();
     await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, formatAssignmentPush(a));
   }
+
+  await sendDueReminders(env, user.chat_id, assignments);
 
   for (const an of announcements) {
     const seen = await env.DB.prepare("SELECT 1 FROM seen_items WHERE chat_id = ? AND item_type = 'announcement' AND item_id = ?")
