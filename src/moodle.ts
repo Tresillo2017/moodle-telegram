@@ -9,9 +9,22 @@ export async function getToken(moodleUrl: string, username: string, password: st
   url.searchParams.set("password", password);
   url.searchParams.set("service", "moodle_mobile_app");
   const res = await fetch(url.toString());
-  const data: any = await res.json();
+  const data = await parseMoodleJson(res, "log in to");
   if (data.error) throw new Error(data.error);
   return data.token as string;
+}
+
+// Moodle sites (and any Cloudflare-proxied host in front of them) can return
+// an HTML error page instead of JSON — e.g. a wrong URL, a maintenance page,
+// or a transient edge error. An unguarded res.json() then throws a raw
+// "Unexpected token ... is not valid JSON" message that gets shown to the
+// user as-is; this wraps that into something they can act on.
+async function parseMoodleJson(res: Response, action: string): Promise<any> {
+  try {
+    return await res.json();
+  } catch {
+    throw new Error(`Could not ${action} your Moodle site — it didn't return a valid response (site may be down or the URL may be wrong)`);
+  }
 }
 
 async function callMoodle(auth: MoodleAuth, wsfunction: string, params: Record<string, string> = {}) {
@@ -21,7 +34,7 @@ async function callMoodle(auth: MoodleAuth, wsfunction: string, params: Record<s
   url.searchParams.set("moodlewsrestformat", "json");
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   const res = await fetch(url.toString());
-  const data: any = await res.json();
+  const data = await parseMoodleJson(res, "reach");
   if (data?.exception) throw new Error(data.message ?? data.exception);
   return data;
 }
