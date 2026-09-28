@@ -276,3 +276,74 @@ export async function getAbsences(auth: AlexiaAuth): Promise<AbsenceRecord[]> {
 
   return records;
 }
+
+/**
+ * Weekly hours per subject, keyed by the subject's canonical (Title Case, no
+ * trailing period) name as used in this project's design docs.
+ *
+ * Alexia's `getAbsences` returns subject names that do NOT match these keys
+ * verbatim — they differ in case and carry a trailing period (e.g. Alexia
+ * returns `"Acceso a datos."` for the `"Acceso a Datos"` key here, and
+ * `"Principios De Ciberseguridad"` — capital "De", no period — for the
+ * `"Principios de Ciberseguridad"` key here). `computeAbsenceStatus` below
+ * normalizes both sides before matching so these real-world subject strings
+ * are not silently dropped; this map itself is kept in the canonical form on
+ * purpose, since it's the readable reference other code/docs use.
+ */
+export const SUBJECT_HOURS: Record<string, number> = {
+  "Acceso a Datos": 5,
+  "Desarrollo de Interfaces": 6,
+  "Programación Multimedia y Dispositivos Móviles": 4,
+  "Programación de Servicios y Procesos": 4,
+  "Principios de Ciberseguridad": 2,
+  "Sistemas de Gestión Empresarial": 5,
+};
+
+const WEEKS_PER_TERM = 19.5;
+const CONTINUOUS_EVAL_THRESHOLD = 0.3;
+
+export function absenceLimitHours(weeklyHours: number): number {
+  return weeklyHours * WEEKS_PER_TERM * CONTINUOUS_EVAL_THRESHOLD;
+}
+
+export interface SubjectAbsenceStatus {
+  subject: string;
+  absenceHours: number;
+  limitHours: number;
+  ratio: number;
+}
+
+/** Lowercases, trims, and strips one optional trailing "." for subject-name matching. */
+function normalizeSubjectName(name: string): string {
+  return name.trim().replace(/\.$/, "").toLowerCase();
+}
+
+const NORMALIZED_SUBJECT_HOURS = new Map<string, number>(
+  Object.entries(SUBJECT_HOURS).map(([subject, hours]) => [normalizeSubjectName(subject), hours])
+);
+
+/**
+ * Computes each subject's absence ratio against its term limit.
+ *
+ * Subject matching against `SUBJECT_HOURS` is normalized (case-insensitive,
+ * trailing "." stripped) rather than exact, because Alexia's real subject
+ * text does not match `SUBJECT_HOURS`'s canonical keys verbatim — see that
+ * map's doc comment. Records whose normalized subject has no match are
+ * dropped. The returned `subject` is the record's original raw text (not the
+ * canonical key), since later tasks display it to the user as-is.
+ */
+export function computeAbsenceStatus(records: AbsenceRecord[]): SubjectAbsenceStatus[] {
+  const out: SubjectAbsenceStatus[] = [];
+  for (const record of records) {
+    const weeklyHours = NORMALIZED_SUBJECT_HOURS.get(normalizeSubjectName(record.subject));
+    if (weeklyHours === undefined) continue;
+    const limitHours = absenceLimitHours(weeklyHours);
+    out.push({
+      subject: record.subject,
+      absenceHours: record.absenceHours,
+      limitHours,
+      ratio: record.absenceHours / limitHours,
+    });
+  }
+  return out;
+}
