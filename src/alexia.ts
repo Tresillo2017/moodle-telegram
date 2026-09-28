@@ -58,37 +58,16 @@ function extractHiddenFields(html: string): Record<string, string> {
 }
 
 /**
- * Logs into Alexia.
- *
- * Alexia's LogOn.aspx is not a plain ASP.NET WebForms postback: the visible
- * form only carries VIEWSTATE bookkeeping. The actual "Entrar" button
- * (`onclick="javascript:validar()"`, in logon.js) calls a session-bound
- * ASP.NET AJAX web service, `WS_Data/WSLogOn.asmx/Validar`, with a JSON body
- * of `{ token, nickname, password }` — `token` being the page's hidden
- * `#Token` field, not the WebForms `__VIEWSTATE`/`__EVENTVALIDATION` fields
- * (those are unused here and were left out of the request; only `token` is
- * required, confirmed against the live site). The call must be made with the
- * session cookies from the initial GET (`AC_SessionId` ties the token to the
- * server-side session) and with `X-Requested-With: XMLHttpRequest` plus a
- * matching `Referer` — omitting either causes the server to throw a null
- * reference error instead of validating credentials.
- *
- * On success the endpoint returns `{"d":""}` and does not set a new
- * authentication cookie: the existing `AC_SessionId` session becomes
- * authenticated server-side. On failure it returns `{"d":"<Spanish error
- * message>"}` (e.g. "Usuario o código de acceso incorrecto").
+ * Calls one method of the `WS_Data/WSLogOn.asmx` ASP.NET AJAX web service and
+ * merges any `Set-Cookie` headers from the response into `cookies`.
  */
-export async function loginAlexia(username: string, password: string): Promise<AlexiaAuth> {
-  const loginUrl = `${ALEXIA_BASE}/LogOn.aspx?key=${ALEXIA_INSTITUTION_KEY}`;
-  const getRes = await fetch(loginUrl, { redirect: "manual" });
-  const cookies = mergeCookies("", extractSetCookieHeaders(getRes.headers));
-  const html = await getRes.text();
-
-  const hidden = extractHiddenFields(html);
-  const token = hidden["Token"];
-  if (!token) throw new Error("Alexia login page did not return the expected form");
-
-  const validarRes = await fetch(`${ALEXIA_BASE}/WS_Data/WSLogOn.asmx/Validar`, {
+async function callLogOnService(
+  method: string,
+  body: Record<string, unknown>,
+  loginUrl: string,
+  cookies: string
+): Promise<{ json: unknown; cookies: string }> {
+  const res = await fetch(`${ALEXIA_BASE}/WS_Data/WSLogOn.asmx/${method}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json; charset=UTF-8",
@@ -96,26 +75,204 @@ export async function loginAlexia(username: string, password: string): Promise<A
       Referer: loginUrl,
       Cookie: cookies,
     },
-    body: JSON.stringify({ token, nickname: username, password }),
+    body: JSON.stringify(body),
   });
 
-  if (!validarRes.ok) {
-    throw new Error(`Alexia login request failed with status ${validarRes.status}`);
+  if (!res.ok) {
+    throw new Error(`Alexia login request (${method}) failed with status ${res.status}`);
   }
 
-  let result: { d?: string };
+  const mergedCookies = mergeCookies(cookies, extractSetCookieHeaders(res.headers));
+
+  let json: unknown;
   try {
-    result = (await validarRes.json()) as { d?: string };
+    json = await res.json();
   } catch {
-    throw new Error("Alexia login returned an unexpected response shape");
+    throw new Error(`Alexia login (${method}) returned an unexpected response shape`);
   }
 
-  if (typeof result.d !== "string") {
+  return { json, cookies: mergedCookies };
+}
+
+/**
+ * Logs into Alexia.
+ *
+ * Alexia's LogOn.aspx is not a plain ASP.NET WebForms postback: the visible
+ * form only carries VIEWSTATE bookkeeping. The actual "Entrar" button
+ * (`onclick="javascript:validar()"`, in logon.js) drives a sequence of
+ * session-bound ASP.NET AJAX web service calls against
+ * `WS_Data/WSLogOn.asmx`, confirmed against the live site:
+ *
+ * 1. `Validar({ token, nickname, password })` — `token` is the page's hidden
+ *    `#Token` field. On success it returns `{"d":""}` and does NOT itself
+ *    authenticate the session; on failure it returns `{"d":"<Spanish error
+ *    message>"}` (e.g. "Usuario o código de acceso incorrecto").
+ * 2. `GetRoles({ token })` — returns `{"d":{"OK":[{"Identificador":...}, ...]}}`,
+ *    the list of roles/profiles the account can log in as. This account has
+ *    exactly one role, so this code always picks `OK[0]`; an account with
+ *    zero or multiple roles is out of scope (logon.js itself branches into a
+ *    "no role" error or a role-picker popup in those cases, neither of which
+ *    this headless flow can drive).
+ * 3. `ValidarRol({ token, idRol, evaluarMultifactor: false })` — THIS is the
+ *    call that actually flips the session to authenticated server-side: its
+ *    response sets `.ASPXAUTH`/`InicioSesion`/`datosUsr` cookies. Before this
+ *    call, even though `Validar` reported success, the `AC_SessionId`/
+ *    `LogOnToken` cookies from the initial GET are still anonymous — any
+ *    authenticated page request with just those redirects back to
+ *    `LogOn.aspx`. (This was verified live: skipping this step, as an
+ *    earlier version of this function did, produces cookies that pass
+ *    `Validar` but fail every subsequent authenticated request.)
+ *
+ * All three calls must be made with the running cookie jar (`AC_SessionId`
+ * ties `token` to the server-side session) and with
+ * `X-Requested-With: XMLHttpRequest` plus a matching `Referer` — omitting
+ * either causes the server to throw a null reference error instead of
+ * validating credentials.
+ */
+export async function loginAlexia(username: string, password: string): Promise<AlexiaAuth> {
+  const loginUrl = `${ALEXIA_BASE}/LogOn.aspx?key=${ALEXIA_INSTITUTION_KEY}`;
+  const getRes = await fetch(loginUrl, { redirect: "manual" });
+  let cookies = mergeCookies("", extractSetCookieHeaders(getRes.headers));
+  const html = await getRes.text();
+
+  const hidden = extractHiddenFields(html);
+  const token = hidden["Token"];
+  if (!token) throw new Error("Alexia login page did not return the expected form");
+
+  const validar = await callLogOnService("Validar", { token, nickname: username, password }, loginUrl, cookies);
+  cookies = validar.cookies;
+  const validarResult = validar.json as { d?: string };
+  if (typeof validarResult.d !== "string") {
     throw new Error("Alexia login returned an unexpected response shape");
   }
-  if (result.d !== "") {
-    throw new Error(`Alexia login failed — ${result.d}`);
+  if (validarResult.d !== "") {
+    throw new Error(`Alexia login failed — ${validarResult.d}`);
+  }
+
+  const roles = await callLogOnService("GetRoles", { token }, loginUrl, cookies);
+  cookies = roles.cookies;
+  const rolesResult = roles.json as { d?: { OK?: Array<{ Identificador?: string }>; Error?: string } };
+  if (rolesResult.d?.Error) {
+    throw new Error(`Alexia login failed — ${rolesResult.d.Error}`);
+  }
+  const firstRole = rolesResult.d?.OK?.[0];
+  if (!firstRole?.Identificador) {
+    throw new Error("Alexia login returned no usable role for this account");
+  }
+
+  const validarRol = await callLogOnService(
+    "ValidarRol",
+    { token, idRol: firstRole.Identificador, evaluarMultifactor: false },
+    loginUrl,
+    cookies
+  );
+  cookies = validarRol.cookies;
+  const validarRolResult = validarRol.json as { d?: { OK?: boolean; Error?: string } };
+  if (validarRolResult.d?.Error) {
+    throw new Error(`Alexia login failed — ${validarRolResult.d.Error}`);
+  }
+  if (validarRolResult.d?.OK !== true) {
+    throw new Error("Alexia login did not confirm the role — account may require an unsupported extra step");
   }
 
   return { cookies };
+}
+
+// GuidAlumno for the account this bot is connected to. This is a per-student
+// identifier, not an institution-wide constant — like `SUBJECT_HOURS`
+// (Task 4), it is hardcoded because this bot is single-tenant (one Alexia
+// account), per the plan's architecture notes.
+const ALEXIA_GUID_ALUMNO = "02a900a1-3637-03c7-ae68-9ce58eb1dd08";
+
+const ALEXIA_ATTENDANCE_TOTALS_GRID_ID = "ctl00_ContenidoPagina_ctl00_GridIncidenciasTotalesAlumnoSesiones1";
+
+export interface AbsenceRecord {
+  subject: string;
+  absenceHours: number;
+}
+
+interface JqGridResponse {
+  rows?: Array<{ cell?: string[] }>;
+}
+
+/**
+ * Fetches per-subject absence totals from Alexia.
+ *
+ * The "ficha del alumno" page (`Fichas/FichaAlumno.aspx`) does NOT itself
+ * contain an absences table — it's a shell that lazily loads several tabs as
+ * iframes, one of which (`incidencias/SeguimientoDiario.aspx`) renders a
+ * jqGrid titled "Incidencias Totales Alumno Sesiones" (totals of incidents
+ * per student session) with one row per subject and columns for CODIGO,
+ * MATERIA (subject name), PROFESOR, and per-incident-type totals — the one
+ * we need is `AUS` (ausencias/absences); there's also a `RET` (retrasos/
+ * lateness) column we ignore.
+ *
+ * That grid's data is not in the page's initial HTML either: it's a second
+ * request to the SAME `SeguimientoDiario.aspx` URL, with a `jqGridID` query
+ * param added, which makes the server respond with the grid's JSON instead
+ * of the page. Confirmed live: this JSON request only succeeds (200 + JSON)
+ * if it's preceded by a plain GET of the page URL without `jqGridID` in the
+ * same session — the server appears to need that first request to set up
+ * some per-grid session state before the `jqGridID` request can read it;
+ * skipping the warm-up GET, or making the JSON request as a standalone POST
+ * with ASP.NET `__VIEWSTATE`/`__EVENTTARGET` postback fields (the more
+ * "standard" WebForms pattern, tried first and confirmed NOT to work here),
+ * both land on Alexia's generic runtime-error page instead.
+ *
+ * Each `AUS` cell is a snippet of HTML, e.g.
+ * `<div class="tablaObservaciones_<guid>" ...><span id="spanObs">5</span>
+ * <div class="divBotonObservacionesIncidencia">...`, or the same wrapper
+ * with no `<span id="spanObs">` at all when the count is zero. The absence
+ * value only ever appeared as a plain integer against this real account, but
+ * the design spec calls out Spanish-locale comma decimals (e.g. `23,4`) as a
+ * possibility elsewhere in Alexia, so the comma-to-dot normalization from
+ * the original plan is kept here for robustness.
+ */
+export async function getAbsences(auth: AlexiaAuth): Promise<AbsenceRecord[]> {
+  const seguimientoUrl = `${ALEXIA_BASE}/paginas/incidencias/SeguimientoDiario.aspx?GuidAlumno=${ALEXIA_GUID_ALUMNO}`;
+
+  const warmUpRes = await fetch(seguimientoUrl, { headers: { Cookie: auth.cookies } });
+  const warmUpHtml = await warmUpRes.text();
+  if (/name="txtPassword"/.test(warmUpHtml)) {
+    throw new Error("Alexia session expired");
+  }
+
+  const gridUrl =
+    `${seguimientoUrl}&jqGridID=${ALEXIA_ATTENDANCE_TOTALS_GRID_ID}` +
+    "&page=1&rows=500&sidx=&sord=asc&_search=false";
+  const gridRes = await fetch(gridUrl, {
+    headers: {
+      Cookie: auth.cookies,
+      "X-Requested-With": "XMLHttpRequest",
+      Referer: seguimientoUrl,
+      Accept: "application/json, text/javascript, */*; q=0.01",
+    },
+  });
+  const gridText = await gridRes.text();
+  if (/name="txtPassword"/.test(gridText)) {
+    throw new Error("Alexia session expired");
+  }
+
+  let grid: JqGridResponse;
+  try {
+    grid = JSON.parse(gridText) as JqGridResponse;
+  } catch {
+    throw new Error("Alexia attendance grid returned an unexpected response shape");
+  }
+
+  const records: AbsenceRecord[] = [];
+  for (const row of grid.rows ?? []) {
+    const cell = row.cell;
+    if (!cell) continue;
+    const subject = cell[3]?.trim();
+    if (!subject) continue;
+    const absenceCellHtml = cell[5] ?? "";
+    const match = absenceCellHtml.match(/<span id="spanObs">([^<]*)<\/span>/);
+    const raw = match ? match[1].trim() : "0";
+    const hours = parseFloat(raw.replace(",", "."));
+    if (Number.isNaN(hours)) continue;
+    records.push({ subject, absenceHours: hours });
+  }
+
+  return records;
 }
