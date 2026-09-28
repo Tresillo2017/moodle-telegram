@@ -134,6 +134,9 @@
     <input name="username" autocomplete="username" required>
     <label>Password</label>
     <input name="password" type="password" autocomplete="current-password" required>
+    <label>Alexia (opcional, para alertas de faltas)</label>
+    <input name="alexiaUsername" placeholder="Usuario de Alexia">
+    <input name="alexiaPassword" type="password" placeholder="Contraseña de Alexia">
     <button type="submit" id="submitBtn">Connect</button>
   </form>
   <div id="msg"></div>
@@ -152,15 +155,20 @@
     btn.textContent = "Connecting...";
     const fd = new FormData(e.target);
     try {
+      const payload = {
+        code,
+        moodleUrl: fd.get("moodleUrl"),
+        username: fd.get("username"),
+        password: fd.get("password"),
+      };
+      const alexiaUsername = fd.get("alexiaUsername");
+      const alexiaPassword = fd.get("alexiaPassword");
+      if (alexiaUsername) payload.alexiaUsername = alexiaUsername;
+      if (alexiaPassword) payload.alexiaPassword = alexiaPassword;
       const res = await fetch("/api/connect", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          code,
-          moodleUrl: fd.get("moodleUrl"),
-          username: fd.get("username"),
-          password: fd.get("password"),
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed");

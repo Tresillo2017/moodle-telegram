@@ -11,6 +11,7 @@ import {
   type Assignment,
   type Announcement,
 } from "./moodle";
+import { loginAlexia } from "./alexia";
 // @ts-ignore - bundled as raw text via wrangler's Text module rule
 import connectHtml from "./connect.html";
 
@@ -249,11 +250,25 @@ async function handleApiConnect(req: Request, env: Env): Promise<Response> {
   const auth = { moodleUrl, token };
   const site: any = await getSiteInfo(auth);
 
+  let alexiaUsername: string | null = null;
+  let alexiaPassword: string | null = null;
+  if (body.alexiaUsername && body.alexiaPassword) {
+    try {
+      await loginAlexia(body.alexiaUsername, body.alexiaPassword);
+      alexiaUsername = body.alexiaUsername;
+      alexiaPassword = body.alexiaPassword;
+    } catch (e: any) {
+      return Response.json({ error: `Alexia: ${e.message ?? "login failed"}` }, { status: 400 });
+    }
+  }
+
   await env.DB.prepare(
-    "INSERT INTO users (chat_id, moodle_url, token, moodle_user_id, full_name, created_at) VALUES (?, ?, ?, ?, ?, ?) " +
-      "ON CONFLICT(chat_id) DO UPDATE SET moodle_url=excluded.moodle_url, token=excluded.token, moodle_user_id=excluded.moodle_user_id, full_name=excluded.full_name"
+    "INSERT INTO users (chat_id, moodle_url, token, moodle_user_id, full_name, created_at, alexia_username, alexia_password) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
+      "ON CONFLICT(chat_id) DO UPDATE SET moodle_url=excluded.moodle_url, token=excluded.token, moodle_user_id=excluded.moodle_user_id, full_name=excluded.full_name, " +
+      "alexia_username=COALESCE(excluded.alexia_username, users.alexia_username), alexia_password=COALESCE(excluded.alexia_password, users.alexia_password)"
   )
-    .bind(row.chat_id, moodleUrl, token, site.userid, site.fullname, Math.floor(Date.now() / 1000))
+    .bind(row.chat_id, moodleUrl, token, site.userid, site.fullname, Math.floor(Date.now() / 1000), alexiaUsername, alexiaPassword)
     .run();
 
   await sendMessage(
