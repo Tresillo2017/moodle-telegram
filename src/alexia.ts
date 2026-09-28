@@ -1,6 +1,12 @@
 const ALEXIA_BASE = "https://web2.alexiaedu.com/ACWeb";
 export const ALEXIA_INSTITUTION_KEY = "NS2IrX8Iq04%3d";
 
+// Cloudflare Workers' default fetch User-Agent doesn't look like a browser,
+// which can get flagged by a target site's own bot protection (Alexia is
+// itself Cloudflare-fronted). A realistic desktop UA avoids that.
+const BROWSER_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+
 export interface AlexiaAuth {
   cookies: string;
 }
@@ -74,6 +80,7 @@ async function callLogOnService(
       "X-Requested-With": "XMLHttpRequest",
       Referer: loginUrl,
       Cookie: cookies,
+      "User-Agent": BROWSER_USER_AGENT,
     },
     body: JSON.stringify(body),
   });
@@ -131,7 +138,7 @@ async function callLogOnService(
  */
 export async function loginAlexia(username: string, password: string): Promise<AlexiaAuth> {
   const loginUrl = `${ALEXIA_BASE}/LogOn.aspx?key=${ALEXIA_INSTITUTION_KEY}`;
-  const getRes = await fetch(loginUrl, { redirect: "manual" });
+  const getRes = await fetch(loginUrl, { redirect: "manual", headers: { "User-Agent": BROWSER_USER_AGENT } });
   let cookies = mergeCookies("", extractSetCookieHeaders(getRes.headers));
   const html = await getRes.text();
 
@@ -238,7 +245,9 @@ interface JqGridResponse {
 export async function getAbsences(auth: AlexiaAuth): Promise<AbsenceRecord[]> {
   const seguimientoUrl = `${ALEXIA_BASE}/paginas/incidencias/SeguimientoDiario.aspx?GuidAlumno=${ALEXIA_GUID_ALUMNO}`;
 
-  const warmUpRes = await fetch(seguimientoUrl, { headers: { Cookie: auth.cookies } });
+  const warmUpRes = await fetch(seguimientoUrl, {
+    headers: { Cookie: auth.cookies, "User-Agent": BROWSER_USER_AGENT },
+  });
   const warmUpHtml = await warmUpRes.text();
   if (/name="txtPassword"/.test(warmUpHtml)) {
     throw new Error("Alexia session expired");
@@ -253,6 +262,7 @@ export async function getAbsences(auth: AlexiaAuth): Promise<AbsenceRecord[]> {
       "X-Requested-With": "XMLHttpRequest",
       Referer: seguimientoUrl,
       Accept: "application/json, text/javascript, */*; q=0.01",
+      "User-Agent": BROWSER_USER_AGENT,
     },
   });
   const gridText = await gridRes.text();

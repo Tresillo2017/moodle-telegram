@@ -3,12 +3,18 @@ export interface MoodleAuth {
   token: string;
 }
 
+// Cloudflare Workers' default fetch User-Agent doesn't look like a browser,
+// which can get flagged by a Moodle site's own bot/WAF protection (many run
+// behind Cloudflare themselves). A realistic desktop UA avoids that.
+const BROWSER_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+
 export async function getToken(moodleUrl: string, username: string, password: string) {
   const url = new URL("/login/token.php", moodleUrl);
   url.searchParams.set("username", username);
   url.searchParams.set("password", password);
   url.searchParams.set("service", "moodle_mobile_app");
-  const res = await fetch(url.toString());
+  const res = await fetch(url.toString(), { headers: { "User-Agent": BROWSER_USER_AGENT } });
   const data = await parseMoodleJson(res, "log in to");
   if (data.error) throw new Error(data.error);
   return data.token as string;
@@ -33,7 +39,7 @@ async function callMoodle(auth: MoodleAuth, wsfunction: string, params: Record<s
   url.searchParams.set("wsfunction", wsfunction);
   url.searchParams.set("moodlewsrestformat", "json");
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  const res = await fetch(url.toString());
+  const res = await fetch(url.toString(), { headers: { "User-Agent": BROWSER_USER_AGENT } });
   const data = await parseMoodleJson(res, "reach");
   if (data?.exception) throw new Error(data.message ?? data.exception);
   return data;

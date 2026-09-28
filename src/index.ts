@@ -271,13 +271,41 @@ async function handleWebhook(req: Request, env: Env): Promise<Response> {
   return new Response("ok");
 }
 
+// GET /api/connect-status?code=... — read-only lookup (does not consume the
+// code) so the /connect page can tell whether this chat is already
+// connected and adapt the form (e.g. hide Moodle fields for a user who only
+// wants to add/update Alexia credentials).
+async function handleConnectStatus(req: Request, env: Env): Promise<Response> {
+  const code = new URL(req.url).searchParams.get("code");
+  if (!code) return Response.json({ valid: false });
+
+  const link = await env.DB.prepare("SELECT chat_id, expires_at FROM link_codes WHERE code = ?")
+    .bind(code)
+    .first<{ chat_id: number; expires_at: number }>();
+  if (!link || link.expires_at < Math.floor(Date.now() / 1000)) {
+    return Response.json({ valid: false });
+  }
+
+  const user = await getUser(env, link.chat_id);
+  return Response.json({
+    valid: true,
+    hasMoodle: !!user,
+    hasAlexia: !!(user?.alexia_username && user?.alexia_password),
+    fullName: user?.full_name ?? null,
+  });
+}
+
 async function handleApiConnect(req: Request, env: Env): Promise<Response> {
   const body: any = await req.json();
   const { code, moodleUrl, username, password } = body;
-  if (!code || !moodleUrl || !username || !password) {
-    return Response.json({ error: "Missing fields" }, { status: 400 });
+  const moodleFieldCount = [moodleUrl, username, password].filter(Boolean).length;
+  if (!code || (moodleFieldCount > 0 && moodleFieldCount < 3)) {
+    return Response.json(
+      { error: "Please fill in all three Moodle fields, or leave them all blank to keep your current Moodle connection." },
+      { status: 400 }
+    );
   }
-  if (!isValidMoodleUrl(moodleUrl)) {
+  if (moodleUrl && !isValidMoodleUrl(moodleUrl)) {
     return Response.json({ error: "Moodle URL must be a valid https:// URL" }, { status: 400 });
   }
 
@@ -290,15 +318,32 @@ async function handleApiConnect(req: Request, env: Env): Promise<Response> {
     return Response.json({ error: "Link expired, send /start again in Telegram" }, { status: 400 });
   }
 
-  let token: string;
-  try {
-    token = await getToken(moodleUrl, username, password);
-  } catch (e: any) {
-    return Response.json({ error: e.message ?? "Moodle login failed" }, { status: 400 });
-  }
+  const existing = await getUser(env, row.chat_id);
 
-  const auth = { moodleUrl, token };
-  const site: any = await getSiteInfo(auth);
+  let finalMoodleUrl: string;
+  let token: string;
+  let siteUserId: number;
+  let fullName: string;
+  if (moodleFieldCount === 3) {
+    try {
+      token = await getToken(moodleUrl, username, password);
+    } catch (e: any) {
+      return Response.json({ error: e.message ?? "Moodle login failed" }, { status: 400 });
+    }
+    const site: any = await getSiteInfo({ moodleUrl, token });
+    finalMoodleUrl = moodleUrl;
+    siteUserId = site.userid;
+    fullName = site.fullname;
+  } else if (existing) {
+    // No Moodle fields submitted — keep the existing Moodle connection
+    // untouched (this request is only adding/updating Alexia credentials).
+    finalMoodleUrl = existing.moodle_url;
+    token = existing.token;
+    siteUserId = existing.moodle_user_id;
+    fullName = existing.full_name;
+  } else {
+    return Response.json({ error: "Moodle site URL, username, and password are required to connect." }, { status: 400 });
+  }
 
   let alexiaUsername: string | null = null;
   let alexiaPassword: string | null = null;
@@ -318,13 +363,13 @@ async function handleApiConnect(req: Request, env: Env): Promise<Response> {
       "ON CONFLICT(chat_id) DO UPDATE SET moodle_url=excluded.moodle_url, token=excluded.token, moodle_user_id=excluded.moodle_user_id, full_name=excluded.full_name, " +
       "alexia_username=COALESCE(excluded.alexia_username, users.alexia_username), alexia_password=COALESCE(excluded.alexia_password, users.alexia_password)"
   )
-    .bind(row.chat_id, moodleUrl, token, site.userid, site.fullname, Math.floor(Date.now() / 1000), alexiaUsername, alexiaPassword)
+    .bind(row.chat_id, finalMoodleUrl, token, siteUserId, fullName, Math.floor(Date.now() / 1000), alexiaUsername, alexiaPassword)
     .run();
 
   await sendMessage(
     env.TELEGRAM_BOT_TOKEN,
     row.chat_id,
-    `Connected as ${escapeHtml(site.fullname)}. You'll get notified about new assignments and announcements.`,
+    `Connected as ${escapeHtml(fullName)}. You'll get notified about new assignments and announcements.`,
     MENU_KEYBOARD
   );
 
@@ -492,6 +537,9 @@ export default {
     }
     if (url.pathname === "/api/connect" && req.method === "POST") {
       return handleApiConnect(req, env);
+    }
+    if (url.pathname === "/api/connect-status" && req.method === "GET") {
+      return handleConnectStatus(req, env);
     }
     return new Response("Not found", { status: 404 });
   },

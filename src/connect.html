@@ -125,16 +125,19 @@
 <body>
 <div class="card">
   <div class="icon">🎓</div>
-  <h1>Connect your Moodle account</h1>
+  <h1 id="title">Connect your Moodle account</h1>
+  <p id="statusNote" class="subtitle" style="display:none;"></p>
   <form id="f">
-    <label>Moodle site URL</label>
-    <input name="moodleUrl" type="url" placeholder="https://moodle.myschool.edu" required>
-    <label>Username</label>
-    <input name="username" autocomplete="username" required>
-    <label>Password</label>
-    <input name="password" type="password" autocomplete="current-password" required>
-    <p class="subtitle">Tu contraseña de Moodle se envía una única vez para verificarla y no se almacena — solo se guarda un token de acceso a Moodle.</p>
-    <label>Alexia (opcional, para alertas de faltas)</label>
+    <div id="moodleFields">
+      <label>Moodle site URL</label>
+      <input name="moodleUrl" type="url" placeholder="https://moodle.myschool.edu">
+      <label>Username</label>
+      <input name="username" autocomplete="username">
+      <label>Password</label>
+      <input name="password" type="password" autocomplete="current-password">
+      <p class="subtitle">Tu contraseña de Moodle se envía una única vez para verificarla y no se almacena — solo se guarda un token de acceso a Moodle.</p>
+    </div>
+    <label id="alexiaLabel">Alexia (opcional, para alertas de faltas)</label>
     <input name="alexiaUsername" placeholder="Usuario de Alexia">
     <input name="alexiaPassword" type="password" placeholder="Contraseña de Alexia">
     <p class="subtitle">A diferencia de Moodle, la contraseña de Alexia SÍ se almacena (sin cifrar) para que el bot pueda comprobar tus faltas cada 15 minutos.</p>
@@ -148,6 +151,42 @@
   const form = document.getElementById("f");
   const btn = document.getElementById("submitBtn");
   const msg = document.getElementById("msg");
+  const title = document.getElementById("title");
+  const statusNote = document.getElementById("statusNote");
+  const moodleFields = document.getElementById("moodleFields");
+  const moodleInputs = moodleFields.querySelectorAll("input");
+  const alexiaLabel = document.getElementById("alexiaLabel");
+
+  // Adapt the form to what's already connected: an already-connected user
+  // only needs to see the Alexia fields, not re-enter Moodle credentials
+  // they've already given us (handleApiConnect keeps them untouched when
+  // the Moodle fields are left out entirely).
+  (async () => {
+    if (!code) return;
+    try {
+      const res = await fetch("/api/connect-status?code=" + encodeURIComponent(code));
+      const status = await res.json();
+      if (!status.valid) return; // let the normal expired-code flow handle it on submit
+      if (status.hasMoodle) {
+        moodleFields.style.display = "none";
+        moodleInputs.forEach((input) => (input.required = false));
+        title.textContent = "Connect your Alexia account";
+        alexiaLabel.textContent = status.hasAlexia
+          ? "Alexia (ya conectado — rellena para actualizar tus credenciales)"
+          : "Alexia (para alertas de faltas)";
+        statusNote.textContent = status.fullName
+          ? "Ya tienes Moodle conectado como " + status.fullName + "."
+          : "Ya tienes Moodle conectado.";
+        statusNote.style.display = "block";
+      } else {
+        moodleInputs.forEach((input) => (input.required = true));
+      }
+    } catch {
+      // Status check is a progressive enhancement — if it fails, fall back
+      // to the default form (Moodle fields required) and let submit-time
+      // errors surface normally.
+    }
+  })();
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -156,12 +195,15 @@
     btn.textContent = "Connecting...";
     const fd = new FormData(e.target);
     try {
-      const payload = {
-        code,
-        moodleUrl: fd.get("moodleUrl"),
-        username: fd.get("username"),
-        password: fd.get("password"),
-      };
+      const payload = { code };
+      const moodleUrl = fd.get("moodleUrl");
+      const username = fd.get("username");
+      const password = fd.get("password");
+      if (moodleUrl || username || password) {
+        payload.moodleUrl = moodleUrl;
+        payload.username = username;
+        payload.password = password;
+      }
       const alexiaUsername = fd.get("alexiaUsername");
       const alexiaPassword = fd.get("alexiaPassword");
       if (alexiaUsername) payload.alexiaUsername = alexiaUsername;
