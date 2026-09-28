@@ -11,7 +11,7 @@ import {
   type Assignment,
   type Announcement,
 } from "./moodle";
-import { loginAlexia } from "./alexia";
+import { loginAlexia, getAbsences, computeAbsenceStatus, type SubjectAbsenceStatus } from "./alexia";
 // @ts-ignore - bundled as raw text via wrangler's Text module rule
 import connectHtml from "./connect.html";
 
@@ -28,10 +28,14 @@ interface UserRow {
   token: string;
   moodle_user_id: number;
   full_name: string;
+  alexia_username: string | null;
+  alexia_password: string | null;
 }
 
 async function getUser(env: Env, chatId: number): Promise<UserRow | null> {
-  return env.DB.prepare("SELECT chat_id, moodle_url, token, moodle_user_id, full_name FROM users WHERE chat_id = ?")
+  return env.DB.prepare(
+    "SELECT chat_id, moodle_url, token, moodle_user_id, full_name, alexia_username, alexia_password FROM users WHERE chat_id = ?"
+  )
     .bind(chatId)
     .first<UserRow>();
 }
@@ -310,7 +314,58 @@ async function sendDueReminders(env: Env, chatId: number, assignments: Assignmen
   }
 }
 
-async function checkUser(env: Env, user: { chat_id: number; moodle_url: string; token: string; moodle_user_id: number }) {
+function formatAbsenceAlert(status: SubjectAbsenceStatus, threshold: "80pct" | "100pct"): string {
+  const pct = Math.round(status.ratio * 100);
+  const icon = threshold === "100pct" ? "🚨" : "⚠️";
+  const verdict =
+    threshold === "100pct"
+      ? "Has superado el límite de faltas — pierdes la evaluación continua."
+      : "Te acercas al límite de faltas.";
+  return (
+    `${icon} <b>${escapeHtml(status.subject)}</b>\n${verdict}\n` +
+    `${status.absenceHours.toFixed(1)}h de ${status.limitHours.toFixed(1)}h (${pct}%)`
+  );
+}
+
+async function checkAbsences(
+  env: Env,
+  user: { chat_id: number; alexia_username: string; alexia_password: string }
+): Promise<void> {
+  const auth = await loginAlexia(user.alexia_username, user.alexia_password);
+  const records = await getAbsences(auth);
+  const statuses = computeAbsenceStatus(records);
+
+  for (const status of statuses) {
+    const threshold: "80pct" | "100pct" | null =
+      status.ratio >= 1 ? "100pct" : status.ratio >= 0.8 ? "80pct" : null;
+    if (threshold === null) continue;
+
+    const seen = await env.DB.prepare(
+      "SELECT 1 FROM absence_alerts WHERE chat_id = ? AND subject = ? AND threshold = ?"
+    )
+      .bind(user.chat_id, status.subject, threshold)
+      .first();
+    if (seen) continue;
+
+    await env.DB.prepare("INSERT INTO absence_alerts (chat_id, subject, threshold) VALUES (?, ?, ?)")
+      .bind(user.chat_id, status.subject, threshold)
+      .run();
+
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, formatAbsenceAlert(status, threshold));
+  }
+}
+
+async function checkUser(
+  env: Env,
+  user: {
+    chat_id: number;
+    moodle_url: string;
+    token: string;
+    moodle_user_id: number;
+    alexia_username: string | null;
+    alexia_password: string | null;
+  }
+) {
   const auth = { moodleUrl: user.moodle_url, token: user.token };
 
   const activeCourseIds = await getActiveCourseIds(auth, user.moodle_user_id);
@@ -341,14 +396,30 @@ async function checkUser(env: Env, user: { chat_id: number; moodle_url: string; 
       .run();
     await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, formatAnnouncementPush(an));
   }
+
+  if (user.alexia_username && user.alexia_password) {
+    try {
+      await checkAbsences(env, {
+        chat_id: user.chat_id,
+        alexia_username: user.alexia_username,
+        alexia_password: user.alexia_password,
+      });
+    } catch (e) {
+      console.error("absence check failed for", user.chat_id, e);
+    }
+  }
 }
 
 async function runPoll(env: Env) {
-  const { results } = await env.DB.prepare("SELECT chat_id, moodle_url, token, moodle_user_id FROM users").all<{
+  const { results } = await env.DB.prepare(
+    "SELECT chat_id, moodle_url, token, moodle_user_id, alexia_username, alexia_password FROM users"
+  ).all<{
     chat_id: number;
     moodle_url: string;
     token: string;
     moodle_user_id: number;
+    alexia_username: string | null;
+    alexia_password: string | null;
   }>();
   for (const user of results ?? []) {
     try {
