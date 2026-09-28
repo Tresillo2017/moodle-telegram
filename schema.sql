@@ -19,3 +19,13 @@ CREATE TABLE IF NOT EXISTS seen_items (
   item_id INTEGER NOT NULL,
   PRIMARY KEY (chat_id, item_type, item_id)
 );
+
+ALTER TABLE users ADD COLUMN alexia_username TEXT;
+ALTER TABLE users ADD COLUMN alexia_password TEXT;
+
+CREATE TABLE IF NOT EXISTS absence_alerts (
+  chat_id INTEGER NOT NULL,
+  subject TEXT NOT NULL,
+  threshold TEXT NOT NULL,
+  PRIMARY KEY (chat_id, subject, threshold)
+);
