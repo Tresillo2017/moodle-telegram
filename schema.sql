@@ -29,3 +29,13 @@ CREATE TABLE IF NOT EXISTS absence_alerts (
   threshold TEXT NOT NULL,
   PRIMARY KEY (chat_id, subject, threshold)
 );
+
+-- Last-seen absence hours per subject, used to detect a newly-registered
+-- absence (hours increased since the last poll) independently of the
+-- 80%/100% threshold alerts in absence_alerts.
+CREATE TABLE IF NOT EXISTS absence_last_seen (
+  chat_id INTEGER NOT NULL,
+  subject TEXT NOT NULL,
+  hours REAL NOT NULL,
+  PRIMARY KEY (chat_id, subject)
+);

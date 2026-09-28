@@ -418,6 +418,14 @@ function formatAbsenceAlert(status: SubjectAbsenceStatus, threshold: "80pct" | "
   );
 }
 
+function formatNewAbsenceAlert(status: SubjectAbsenceStatus, delta: number): string {
+  const pct = Math.round(status.ratio * 100);
+  return (
+    `🆕 Nueva falta en <b>${escapeHtml(status.subject)}</b> (+${delta.toFixed(1)}h)\n` +
+    `${status.absenceHours.toFixed(1)}h de ${status.limitHours.toFixed(1)}h (${pct}%)`
+  );
+}
+
 async function checkAbsences(
   env: Env,
   user: { chat_id: number; alexia_username: string; alexia_password: string }
@@ -427,6 +435,30 @@ async function checkAbsences(
   const statuses = computeAbsenceStatus(records);
 
   for (const status of statuses) {
+    // New-absence detection: compare against the last-seen hour count for
+    // this subject, independent of the 80%/100% threshold alerts below. No
+    // alert on the very first sighting of a subject (that would spam the
+    // user with their entire accumulated history on first connect) — it
+    // only establishes the baseline to diff against next time.
+    const lastSeen = await env.DB.prepare("SELECT hours FROM absence_last_seen WHERE chat_id = ? AND subject = ?")
+      .bind(user.chat_id, status.subject)
+      .first<{ hours: number }>();
+    if (lastSeen && status.absenceHours > lastSeen.hours) {
+      await sendMessage(
+        env.TELEGRAM_BOT_TOKEN,
+        user.chat_id,
+        formatNewAbsenceAlert(status, status.absenceHours - lastSeen.hours)
+      );
+    }
+    if (!lastSeen || status.absenceHours !== lastSeen.hours) {
+      await env.DB.prepare(
+        "INSERT INTO absence_last_seen (chat_id, subject, hours) VALUES (?, ?, ?) " +
+          "ON CONFLICT(chat_id, subject) DO UPDATE SET hours = excluded.hours"
+      )
+        .bind(user.chat_id, status.subject, status.absenceHours)
+        .run();
+    }
+
     const threshold: "80pct" | "100pct" | null =
       status.ratio >= 1 ? "100pct" : status.ratio >= 0.8 ? "80pct" : null;
     if (threshold === null) continue;
