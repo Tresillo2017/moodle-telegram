@@ -231,9 +231,13 @@ async function handleWebhook(req: Request, env: Env): Promise<Response> {
     const existing = await getUser(env, chatId);
     if (existing) {
       await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, `Already connected as ${escapeHtml(existing.full_name)}.`, MENU_KEYBOARD);
-    } else {
-      await sendConnectLink(env, chatId);
     }
+    // Always (re-)send the connect link, even for an already-connected user,
+    // so they can revisit the form to add or update their Alexia credentials
+    // without losing their existing Moodle connection (handleApiConnect
+    // preserves it via COALESCE when Alexia fields are the only thing
+    // submitted this time).
+    await sendConnectLink(env, chatId);
     return new Response("ok");
   }
 
