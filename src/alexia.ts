@@ -182,6 +182,13 @@ export async function loginAlexia(username: string, password: string): Promise<A
 // identifier, not an institution-wide constant — like `SUBJECT_HOURS`
 // (Task 4), it is hardcoded because this bot is single-tenant (one Alexia
 // account), per the plan's architecture notes.
+//
+// SINGLE-TENANT LIMITATION: getAbsences always fetches attendance for this
+// one hardcoded student, tied to one institution (ALEXIA_INSTITUTION_KEY),
+// regardless of which Telegram user's poll cycle is running or whose Alexia
+// credentials were used to log in. It is NOT safe to expose this feature to
+// multiple Telegram users with different Alexia accounts without deriving
+// this GUID from the authenticated session instead. See README.md.
 const ALEXIA_GUID_ALUMNO = "02a900a1-3637-03c7-ae68-9ce58eb1dd08";
 
 const ALEXIA_ATTENDANCE_TOTALS_GRID_ID = "ctl00_ContenidoPagina_ctl00_GridIncidenciasTotalesAlumnoSesiones1";

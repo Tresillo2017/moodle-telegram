@@ -126,7 +126,6 @@
 <div class="card">
   <div class="icon">🎓</div>
   <h1>Connect your Moodle account</h1>
-  <p class="subtitle">Your password is sent once to verify against your Moodle site and is never stored — only a Moodle access token is kept.</p>
   <form id="f">
     <label>Moodle site URL</label>
     <input name="moodleUrl" type="url" placeholder="https://moodle.myschool.edu" required>
@@ -134,9 +133,11 @@
     <input name="username" autocomplete="username" required>
     <label>Password</label>
     <input name="password" type="password" autocomplete="current-password" required>
+    <p class="subtitle">Tu contraseña de Moodle se envía una única vez para verificarla y no se almacena — solo se guarda un token de acceso a Moodle.</p>
     <label>Alexia (opcional, para alertas de faltas)</label>
     <input name="alexiaUsername" placeholder="Usuario de Alexia">
     <input name="alexiaPassword" type="password" placeholder="Contraseña de Alexia">
+    <p class="subtitle">A diferencia de Moodle, la contraseña de Alexia SÍ se almacena (sin cifrar) para que el bot pueda comprobar tus faltas cada 15 minutos.</p>
     <button type="submit" id="submitBtn">Connect</button>
   </form>
   <div id="msg"></div>

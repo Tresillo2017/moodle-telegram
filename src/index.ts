@@ -410,33 +410,37 @@ async function checkUser(
 ) {
   const auth = { moodleUrl: user.moodle_url, token: user.token };
 
-  const activeCourseIds = await getActiveCourseIds(auth, user.moodle_user_id);
-  const allAssignments = await getAssignments(auth, activeCourseIds);
-  const assignments = await filterUnsubmitted(auth, user.moodle_user_id, allAssignments);
-  const announcements = await getAnnouncements(auth, [...activeCourseIds]);
+  try {
+    const activeCourseIds = await getActiveCourseIds(auth, user.moodle_user_id);
+    const allAssignments = await getAssignments(auth, activeCourseIds);
+    const assignments = await filterUnsubmitted(auth, user.moodle_user_id, allAssignments);
+    const announcements = await getAnnouncements(auth, [...activeCourseIds]);
 
-  for (const a of assignments) {
-    const seen = await env.DB.prepare("SELECT 1 FROM seen_items WHERE chat_id = ? AND item_type = 'assignment' AND item_id = ?")
-      .bind(user.chat_id, a.id)
-      .first();
-    if (seen) continue;
-    await env.DB.prepare("INSERT INTO seen_items (chat_id, item_type, item_id) VALUES (?, 'assignment', ?)")
-      .bind(user.chat_id, a.id)
-      .run();
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, formatAssignmentPush(a));
-  }
+    for (const a of assignments) {
+      const seen = await env.DB.prepare("SELECT 1 FROM seen_items WHERE chat_id = ? AND item_type = 'assignment' AND item_id = ?")
+        .bind(user.chat_id, a.id)
+        .first();
+      if (seen) continue;
+      await env.DB.prepare("INSERT INTO seen_items (chat_id, item_type, item_id) VALUES (?, 'assignment', ?)")
+        .bind(user.chat_id, a.id)
+        .run();
+      await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, formatAssignmentPush(a));
+    }
 
-  await sendDueReminders(env, user.chat_id, assignments);
+    await sendDueReminders(env, user.chat_id, assignments);
 
-  for (const an of announcements) {
-    const seen = await env.DB.prepare("SELECT 1 FROM seen_items WHERE chat_id = ? AND item_type = 'announcement' AND item_id = ?")
-      .bind(user.chat_id, an.id)
-      .first();
-    if (seen) continue;
-    await env.DB.prepare("INSERT INTO seen_items (chat_id, item_type, item_id) VALUES (?, 'announcement', ?)")
-      .bind(user.chat_id, an.id)
-      .run();
-    await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, formatAnnouncementPush(an));
+    for (const an of announcements) {
+      const seen = await env.DB.prepare("SELECT 1 FROM seen_items WHERE chat_id = ? AND item_type = 'announcement' AND item_id = ?")
+        .bind(user.chat_id, an.id)
+        .first();
+      if (seen) continue;
+      await env.DB.prepare("INSERT INTO seen_items (chat_id, item_type, item_id) VALUES (?, 'announcement', ?)")
+        .bind(user.chat_id, an.id)
+        .run();
+      await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, formatAnnouncementPush(an));
+    }
+  } catch (e) {
+    console.error("moodle check failed for", user.chat_id, e);
   }
 
   if (user.alexia_username && user.alexia_password) {
