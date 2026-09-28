@@ -18,7 +18,7 @@ import connectHtml from "./connect.html";
 const CODE_TTL_SECONDS = 10 * 60;
 
 const MENU_KEYBOARD: ReplyKeyboard = {
-  keyboard: [["📚 Assignments", "📢 Announcements"], ["ℹ️ Status"]],
+  keyboard: [["📚 Assignments", "📢 Announcements"], ["ℹ️ Status", "📅 Faltas"]],
   resize_keyboard: true,
 };
 
@@ -167,12 +167,52 @@ async function sendAnnouncementsList(env: Env, user: UserRow) {
   await sendChunks(env, user.chat_id, loadingId, chunkBlocks(blocks));
 }
 
+async function sendAbsenceStatus(env: Env, user: UserRow) {
+  if (!user.alexia_username || !user.alexia_password) {
+    await sendMessage(
+      env.TELEGRAM_BOT_TOKEN,
+      user.chat_id,
+      "No has conectado tu cuenta de Alexia. Envía /start y añade tus credenciales de Alexia para ver tus faltas."
+    );
+    return;
+  }
+
+  const loadingId = await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, "⏳ Consultando tus faltas...");
+  let statuses: SubjectAbsenceStatus[];
+  try {
+    const auth = await loginAlexia(user.alexia_username, user.alexia_password);
+    const records = await getAbsences(auth);
+    statuses = computeAbsenceStatus(records);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "error desconocido";
+    const text = `No se pudo consultar Alexia: ${escapeHtml(message)}`;
+    if (loadingId !== null) await editMessageText(env.TELEGRAM_BOT_TOKEN, user.chat_id, loadingId, text);
+    else await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, text);
+    return;
+  }
+
+  if (statuses.length === 0) {
+    const text = "No hay datos de asistencia disponibles todavía.";
+    if (loadingId !== null) await editMessageText(env.TELEGRAM_BOT_TOKEN, user.chat_id, loadingId, text);
+    else await sendMessage(env.TELEGRAM_BOT_TOKEN, user.chat_id, text);
+    return;
+  }
+
+  const blocks = statuses.map((s) => {
+    const pct = Math.round(s.ratio * 100);
+    const icon = s.ratio >= 1 ? "🚨" : s.ratio >= 0.8 ? "⚠️" : "✅";
+    return `${icon} <b>${escapeHtml(s.subject)}</b>\n${s.absenceHours.toFixed(1)}h de ${s.limitHours.toFixed(1)}h (${pct}%)`;
+  });
+  await sendChunks(env, user.chat_id, loadingId, chunkBlocks(blocks));
+}
+
 const HELP_TEXT =
   "Commands:\n" +
   "/start – connect or reconnect your Moodle account\n" +
   "/assignments – list your current assignments\n" +
   "/announcements – list recent course announcements\n" +
   "/status – show your connected account\n" +
+  "/faltas – show your current absence status per subject\n" +
   "/help – show this message\n\n" +
   "You'll also get a message automatically whenever a new assignment or announcement appears, " +
   "plus a reminder 24 hours and 1 hour before an unsubmitted assignment is due.";
@@ -219,6 +259,8 @@ async function handleWebhook(req: Request, env: Env): Promise<Response> {
       `Connected as <b>${escapeHtml(user.full_name)}</b>\nMoodle site: ${escapeHtml(user.moodle_url)}`,
       MENU_KEYBOARD
     );
+  } else if (text === "/faltas" || text === "📅 Faltas") {
+    await sendAbsenceStatus(env, user);
   } else {
     await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, HELP_TEXT, MENU_KEYBOARD);
   }
