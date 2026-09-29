@@ -7,6 +7,21 @@ export const ALEXIA_INSTITUTION_KEY = "NS2IrX8Iq04%3d";
 const BROWSER_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 
+// A bare User-Agent isn't always enough for stricter bot management — real
+// Chrome also sends these on every request, so their absence is itself a
+// fingerprint. Included on all Alexia requests below.
+const BROWSER_COMMON_HEADERS = {
+  "User-Agent": BROWSER_USER_AGENT,
+  Accept: "*/*",
+  "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+  "sec-ch-ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"Windows"',
+  "Sec-Fetch-Site": "same-origin",
+  "Sec-Fetch-Mode": "cors",
+  "Sec-Fetch-Dest": "empty",
+};
+
 export interface AlexiaAuth {
   cookies: string;
 }
@@ -76,11 +91,12 @@ async function callLogOnService(
   const res = await fetch(`${ALEXIA_BASE}/WS_Data/WSLogOn.asmx/${method}`, {
     method: "POST",
     headers: {
+      ...BROWSER_COMMON_HEADERS,
       "Content-Type": "application/json; charset=UTF-8",
+      Accept: "application/json, text/javascript, */*; q=0.01",
       "X-Requested-With": "XMLHttpRequest",
       Referer: loginUrl,
       Cookie: cookies,
-      "User-Agent": BROWSER_USER_AGENT,
     },
     body: JSON.stringify(body),
   });
@@ -138,7 +154,10 @@ async function callLogOnService(
  */
 export async function loginAlexia(username: string, password: string): Promise<AlexiaAuth> {
   const loginUrl = `${ALEXIA_BASE}/LogOn.aspx?key=${ALEXIA_INSTITUTION_KEY}`;
-  const getRes = await fetch(loginUrl, { redirect: "manual", headers: { "User-Agent": BROWSER_USER_AGENT } });
+  const getRes = await fetch(loginUrl, {
+    redirect: "manual",
+    headers: { ...BROWSER_COMMON_HEADERS, "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document" },
+  });
   let cookies = mergeCookies("", extractSetCookieHeaders(getRes.headers));
   const html = await getRes.text();
 
@@ -246,7 +265,12 @@ export async function getAbsences(auth: AlexiaAuth): Promise<AbsenceRecord[]> {
   const seguimientoUrl = `${ALEXIA_BASE}/paginas/incidencias/SeguimientoDiario.aspx?GuidAlumno=${ALEXIA_GUID_ALUMNO}`;
 
   const warmUpRes = await fetch(seguimientoUrl, {
-    headers: { Cookie: auth.cookies, "User-Agent": BROWSER_USER_AGENT },
+    headers: {
+      ...BROWSER_COMMON_HEADERS,
+      Cookie: auth.cookies,
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Dest": "document",
+    },
   });
   const warmUpHtml = await warmUpRes.text();
   if (/name="txtPassword"/.test(warmUpHtml)) {
@@ -258,11 +282,11 @@ export async function getAbsences(auth: AlexiaAuth): Promise<AbsenceRecord[]> {
     "&page=1&rows=500&sidx=&sord=asc&_search=false";
   const gridRes = await fetch(gridUrl, {
     headers: {
+      ...BROWSER_COMMON_HEADERS,
       Cookie: auth.cookies,
       "X-Requested-With": "XMLHttpRequest",
       Referer: seguimientoUrl,
       Accept: "application/json, text/javascript, */*; q=0.01",
-      "User-Agent": BROWSER_USER_AGENT,
     },
   });
   const gridText = await gridRes.text();
