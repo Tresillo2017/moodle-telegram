@@ -338,6 +338,7 @@ export const SUBJECT_HOURS: Record<string, number> = {
   "Programación de Servicios y Procesos": 4,
   "Principios de Ciberseguridad": 2,
   "Sistemas de Gestión Empresarial": 5,
+  Sostenibilidad: 1,
 };
 
 const WEEKS_PER_TERM = 19.5;
