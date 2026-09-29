@@ -339,6 +339,7 @@ export const SUBJECT_HOURS: Record<string, number> = {
   "Principios de Ciberseguridad": 2,
   "Sistemas de Gestión Empresarial": 5,
   "Sostenibilidad aplicada al sistema productivo": 1,
+  "Itinerario para la empleabilidad II": 2,
 };
 
 const WEEKS_PER_TERM = 19.5;
