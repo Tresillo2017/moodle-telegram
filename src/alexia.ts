@@ -153,6 +153,19 @@ async function callLogOnService(
  * validating credentials.
  */
 export async function loginAlexia(username: string, password: string): Promise<AlexiaAuth> {
+  // Alexia intermittently answers "Institución no válida" for the same valid
+  // key/credentials (session/backend flakiness), so retry that error a few times.
+  // ponytail: fixed 3 attempts, no backoff; add delay if it still flakes.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await loginAlexiaOnce(username, password);
+    } catch (e) {
+      if (attempt >= 3 || !(e instanceof Error) || !e.message.includes("Institución no válida")) throw e;
+    }
+  }
+}
+
+async function loginAlexiaOnce(username: string, password: string): Promise<AlexiaAuth> {
   const loginUrl = `${ALEXIA_BASE}/LogOn.aspx?key=${ALEXIA_INSTITUTION_KEY}`;
   const getRes = await fetch(loginUrl, {
     redirect: "manual",
