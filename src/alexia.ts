@@ -285,7 +285,7 @@ async function selectSchoolYear(pageUrl: string, pageHtml: string, cookies: stri
   const applied = text.match(/filtradorFechas1_fechaInicio"[^>]*value="([^"]*)"/)?.[1];
   if (!res.ok || applied !== from) {
     // Raw excerpt (scripts included) so a WAF/error/redirect page is recognisable.
-    const excerpt = text.replace(/\s+/g, " ").trim().slice(0, 200);
+    const excerpt = text.replace(/\s+/g, " ").trim().slice(0, 600);
     throw new Error(
       `Alexia school-year filter request failed (status ${res.status}, from=${applied}, ` +
         `url=${res.url}, length=${text.length}): ${excerpt}`
@@ -343,22 +343,28 @@ export async function getAbsences(auth: AlexiaAuth): Promise<AbsenceRecord[]> {
     throw new Error("Alexia session expired");
   }
 
-  // The page defaults to a one-week date filter, so widen it to the whole school year.
-  const warmUpCookies = mergeCookies(auth.cookies, extractSetCookieHeaders(warmUpRes.headers));
-  const cookies = await selectSchoolYear(seguimientoUrl, warmUpHtml, warmUpCookies);
-
   const gridUrl =
     `${seguimientoUrl}&jqGridID=${ALEXIA_ATTENDANCE_TOTALS_GRID_ID}` +
     "&page=1&rows=500&sidx=&sord=asc&_search=false";
-  const gridRes = await fetch(gridUrl, {
-    headers: {
-      ...BROWSER_COMMON_HEADERS,
-      Cookie: cookies,
-      "X-Requested-With": "XMLHttpRequest",
-      Referer: seguimientoUrl,
-      Accept: "application/json, text/javascript, */*; q=0.01",
-    },
-  });
+  const fetchGrid = (cookieJar: string) =>
+    fetch(gridUrl, {
+      headers: {
+        ...BROWSER_COMMON_HEADERS,
+        Cookie: cookieJar,
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: seguimientoUrl,
+        Accept: "application/json, text/javascript, */*; q=0.01",
+      },
+    });
+
+  // The page defaults to a one-week date filter, so widen it to the whole school
+  // year. The browser loads the grid once before posting the filter (the server
+  // keeps grid state in the session), so do the same and discard that response.
+  const warmUpCookies = mergeCookies(auth.cookies, extractSetCookieHeaders(warmUpRes.headers));
+  await (await fetchGrid(warmUpCookies)).text();
+  const cookies = await selectSchoolYear(seguimientoUrl, warmUpHtml, warmUpCookies);
+
+  const gridRes = await fetchGrid(cookies);
   const gridText = await gridRes.text();
   if (/name="txtPassword"/.test(gridText)) {
     throw new Error("Alexia session expired");
