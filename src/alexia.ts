@@ -244,12 +244,14 @@ interface JqGridResponse {
 const FILTER_CONTROL = "ctl00$ContenidoPagina$ctl00$filtradorFechas1";
 
 /**
- * Mirrors the page's "Display data for → School year" option: the date filter
- * (default: last week) is server-side session state, set by an UpdatePanel
- * postback whose argument is `"<from>#<to>"` (M/D/YYYY). The school-year bounds
- * come from the page's own `hdnFechaInicioCentro`/`hdnFechaFinalCentro` fields.
+ * Mirrors the page's "Display data for → School year" option (value `1000`):
+ * the date filter (default: last week) is server-side session state, set by a
+ * plain WebForms postback whose `__EVENTARGUMENT` is `"<from>#<to>"` (M/D/YYYY)
+ * — confirmed against a browser capture. The school-year bounds come from the
+ * page's own `hdnFechaInicioCentro`/`hdnFechaFinalCentro` fields. Returns the
+ * cookie jar updated with anything the postback set.
  */
-async function selectSchoolYear(pageUrl: string, pageHtml: string, cookies: string): Promise<void> {
+async function selectSchoolYear(pageUrl: string, pageHtml: string, cookies: string): Promise<string> {
   const fields = extractHiddenFields(pageHtml);
   const from = fields[`${FILTER_CONTROL}$hdnFechaInicioCentro`];
   const to = fields[`${FILTER_CONTROL}$hdnFechaFinalCentro`];
@@ -257,31 +259,33 @@ async function selectSchoolYear(pageUrl: string, pageHtml: string, cookies: stri
 
   const form = new URLSearchParams({
     ...fields,
-    "ctl00$scriptManager1": `ctl00$ContenidoPagina$ctl00$updGrid|${FILTER_CONTROL}`,
+    [`${FILTER_CONTROL}$cmbFiltroFecha`]: "1000",
     [`${FILTER_CONTROL}$fechaInicio`]: from,
     [`${FILTER_CONTROL}$fechaFin`]: to,
-    __EVENTTARGET: FILTER_CONTROL,
+    __EVENTTARGET: FILTER_CONTROL.replaceAll("$", "_"),
     __EVENTARGUMENT: `${from}#${to}`,
-    __ASYNCPOST: "true",
   });
   const res = await fetch(pageUrl, {
     method: "POST",
     headers: {
       ...BROWSER_COMMON_HEADERS,
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       Cookie: cookies,
-      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-      "X-Requested-With": "XMLHttpRequest",
-      "X-MicrosoftAjax": "Delta=true",
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Dest": "iframe",
       Referer: pageUrl,
     },
     body: form,
   });
   const text = await res.text();
   if (/name="txtPassword"/.test(text)) throw new Error("Alexia session expired");
-  // Delta responses look like `1|#||4|...|updatePanel|...`; errors use the `error` type.
-  if (!res.ok || !text.includes("|updatePanel|") || text.includes("|error|")) {
-    throw new Error("Alexia school-year filter request failed");
+  // The page echoes the applied filter back in its "From" input.
+  const applied = text.match(/filtradorFechas1_fechaInicio"[^>]*value="([^"]*)"/)?.[1];
+  if (!res.ok || applied !== from) {
+    throw new Error(`Alexia school-year filter request failed (status ${res.status}, from=${applied})`);
   }
+  return mergeCookies(cookies, extractSetCookieHeaders(res.headers));
 }
 
 /**
@@ -334,8 +338,8 @@ export async function getAbsences(auth: AlexiaAuth): Promise<AbsenceRecord[]> {
   }
 
   // The page defaults to a one-week date filter, so widen it to the whole school year.
-  const cookies = mergeCookies(auth.cookies, extractSetCookieHeaders(warmUpRes.headers));
-  await selectSchoolYear(seguimientoUrl, warmUpHtml, cookies);
+  const warmUpCookies = mergeCookies(auth.cookies, extractSetCookieHeaders(warmUpRes.headers));
+  const cookies = await selectSchoolYear(seguimientoUrl, warmUpHtml, warmUpCookies);
 
   const gridUrl =
     `${seguimientoUrl}&jqGridID=${ALEXIA_ATTENDANCE_TOTALS_GRID_ID}` +
