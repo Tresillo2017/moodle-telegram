@@ -62,8 +62,8 @@ function mergeCookies(existing: string, setCookieHeaders: string[]): string {
 // NOTE: attribute order in Alexia's hidden inputs is inconsistent (some are
 // `type="hidden" ... name="..."`, others are `name="..." type="hidden" ...`),
 // so this extraction must not assume a fixed attribute order.
-function extractHiddenFields(html: string): Record<string, string> {
-  const fields: Record<string, string> = {};
+function extractHiddenPairs(html: string): Array<[string, string]> {
+  const pairs: Array<[string, string]> = [];
   const inputRe = /<input\b[^>]*>/g;
   let inputMatch: RegExpExecArray | null;
   while ((inputMatch = inputRe.exec(html)) !== null) {
@@ -73,9 +73,13 @@ function extractHiddenFields(html: string): Record<string, string> {
     const valueMatch = tag.match(/value="([^"]*)"/);
     if (!nameMatch) continue;
     const value = valueMatch ? valueMatch[1] : "";
-    fields[nameMatch[1]] = value.replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+    pairs.push([nameMatch[1], value.replace(/&quot;/g, '"').replace(/&amp;/g, "&")]);
   }
-  return fields;
+  return pairs;
+}
+
+function extractHiddenFields(html: string): Record<string, string> {
+  return Object.fromEntries(extractHiddenPairs(html));
 }
 
 /**
@@ -257,14 +261,14 @@ async function selectSchoolYear(pageUrl: string, pageHtml: string, cookies: stri
   const to = fields[`${FILTER_CONTROL}$hdnFechaFinalCentro`];
   if (!from || !to) throw new Error("Alexia attendance page did not expose the school-year range");
 
-  const form = new URLSearchParams({
-    ...fields,
-    [`${FILTER_CONTROL}$cmbFiltroFecha`]: "1000",
-    [`${FILTER_CONTROL}$fechaInicio`]: from,
-    [`${FILTER_CONTROL}$fechaFin`]: to,
-    __EVENTTARGET: FILTER_CONTROL.replaceAll("$", "_"),
-    __EVENTARGUMENT: `${from}#${to}`,
-  });
+  // Keep duplicate names (the grid's two hidden inputs share one name, which
+  // ASP.NET reads as a comma-joined pair), then override the filter fields.
+  const form = new URLSearchParams(extractHiddenPairs(pageHtml));
+  form.set(`${FILTER_CONTROL}$cmbFiltroFecha`, "1000");
+  form.set(`${FILTER_CONTROL}$fechaInicio`, from);
+  form.set(`${FILTER_CONTROL}$fechaFin`, to);
+  form.set("__EVENTTARGET", FILTER_CONTROL.replaceAll("$", "_"));
+  form.set("__EVENTARGUMENT", `${from}#${to}`);
   const res = await fetch(pageUrl, {
     method: "POST",
     headers: {
