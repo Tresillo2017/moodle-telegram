@@ -153,14 +153,14 @@ async function callLogOnService(
  * validating credentials.
  */
 export async function loginAlexia(username: string, password: string): Promise<AlexiaAuth> {
-  // Alexia intermittently answers "Institución no válida" for the same valid
+  // Alexia intermittently answers "Institución no válida" / "Rol no válido" for the same valid
   // key/credentials (session/backend flakiness), so retry that error a few times.
   // ponytail: fixed 3 attempts, no backoff; add delay if it still flakes.
   for (let attempt = 1; ; attempt++) {
     try {
       return await loginAlexiaOnce(username, password);
     } catch (e) {
-      if (attempt >= 3 || !(e instanceof Error) || !e.message.includes("Institución no válida")) throw e;
+      if (attempt >= 3 || !(e instanceof Error) || !/Institución no válida|Rol no válido/.test(e.message)) throw e;
     }
   }
 }
@@ -284,9 +284,12 @@ async function selectSchoolYear(pageUrl: string, pageHtml: string, cookies: stri
   // The page echoes the applied filter back in its "From" input.
   const applied = text.match(/filtradorFechas1_fechaInicio"[^>]*value="([^"]*)"/)?.[1];
   if (!res.ok || applied !== from) {
-    // Include a short plain-text excerpt so a WAF/error page is recognisable.
-    const excerpt = text.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
-    throw new Error(`Alexia school-year filter request failed (status ${res.status}, from=${applied}): ${excerpt}`);
+    // Raw excerpt (scripts included) so a WAF/error/redirect page is recognisable.
+    const excerpt = text.replace(/\s+/g, " ").trim().slice(0, 200);
+    throw new Error(
+      `Alexia school-year filter request failed (status ${res.status}, from=${applied}, ` +
+        `url=${res.url}, length=${text.length}): ${excerpt}`
+    );
   }
   return mergeCookies(cookies, extractSetCookieHeaders(res.headers));
 }
