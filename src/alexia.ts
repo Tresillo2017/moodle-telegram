@@ -272,6 +272,7 @@ async function selectSchoolYear(pageUrl: string, pageHtml: string, cookies: stri
       Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       Cookie: cookies,
       "Content-Type": "application/x-www-form-urlencoded",
+      Origin: new URL(pageUrl).origin,
       "Sec-Fetch-Mode": "navigate",
       "Sec-Fetch-Dest": "iframe",
       Referer: pageUrl,
@@ -283,7 +284,9 @@ async function selectSchoolYear(pageUrl: string, pageHtml: string, cookies: stri
   // The page echoes the applied filter back in its "From" input.
   const applied = text.match(/filtradorFechas1_fechaInicio"[^>]*value="([^"]*)"/)?.[1];
   if (!res.ok || applied !== from) {
-    throw new Error(`Alexia school-year filter request failed (status ${res.status}, from=${applied})`);
+    // Include a short plain-text excerpt so a WAF/error page is recognisable.
+    const excerpt = text.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+    throw new Error(`Alexia school-year filter request failed (status ${res.status}, from=${applied}): ${excerpt}`);
   }
   return mergeCookies(cookies, extractSetCookieHeaders(res.headers));
 }
