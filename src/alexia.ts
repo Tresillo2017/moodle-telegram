@@ -241,6 +241,49 @@ interface JqGridResponse {
   rows?: Array<{ cell?: string[] }>;
 }
 
+const FILTER_CONTROL = "ctl00$ContenidoPagina$ctl00$filtradorFechas1";
+
+/**
+ * Mirrors the page's "Display data for → School year" option: the date filter
+ * (default: last week) is server-side session state, set by an UpdatePanel
+ * postback whose argument is `"<from>#<to>"` (M/D/YYYY). The school-year bounds
+ * come from the page's own `hdnFechaInicioCentro`/`hdnFechaFinalCentro` fields.
+ */
+async function selectSchoolYear(pageUrl: string, pageHtml: string, cookies: string): Promise<void> {
+  const fields = extractHiddenFields(pageHtml);
+  const from = fields[`${FILTER_CONTROL}$hdnFechaInicioCentro`];
+  const to = fields[`${FILTER_CONTROL}$hdnFechaFinalCentro`];
+  if (!from || !to) throw new Error("Alexia attendance page did not expose the school-year range");
+
+  const form = new URLSearchParams({
+    ...fields,
+    "ctl00$scriptManager1": `ctl00$ContenidoPagina$ctl00$updGrid|${FILTER_CONTROL}`,
+    [`${FILTER_CONTROL}$fechaInicio`]: from,
+    [`${FILTER_CONTROL}$fechaFin`]: to,
+    __EVENTTARGET: FILTER_CONTROL,
+    __EVENTARGUMENT: `${from}#${to}`,
+    __ASYNCPOST: "true",
+  });
+  const res = await fetch(pageUrl, {
+    method: "POST",
+    headers: {
+      ...BROWSER_COMMON_HEADERS,
+      Cookie: cookies,
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "X-Requested-With": "XMLHttpRequest",
+      "X-MicrosoftAjax": "Delta=true",
+      Referer: pageUrl,
+    },
+    body: form,
+  });
+  const text = await res.text();
+  if (/name="txtPassword"/.test(text)) throw new Error("Alexia session expired");
+  // Delta responses look like `1|#||4|...|updatePanel|...`; errors use the `error` type.
+  if (!res.ok || !text.includes("|updatePanel|") || text.includes("|error|")) {
+    throw new Error("Alexia school-year filter request failed");
+  }
+}
+
 /**
  * Fetches per-subject absence totals from Alexia.
  *
@@ -290,13 +333,17 @@ export async function getAbsences(auth: AlexiaAuth): Promise<AbsenceRecord[]> {
     throw new Error("Alexia session expired");
   }
 
+  // The page defaults to a one-week date filter, so widen it to the whole school year.
+  const cookies = mergeCookies(auth.cookies, extractSetCookieHeaders(warmUpRes.headers));
+  await selectSchoolYear(seguimientoUrl, warmUpHtml, cookies);
+
   const gridUrl =
     `${seguimientoUrl}&jqGridID=${ALEXIA_ATTENDANCE_TOTALS_GRID_ID}` +
     "&page=1&rows=500&sidx=&sord=asc&_search=false";
   const gridRes = await fetch(gridUrl, {
     headers: {
       ...BROWSER_COMMON_HEADERS,
-      Cookie: auth.cookies,
+      Cookie: cookies,
       "X-Requested-With": "XMLHttpRequest",
       Referer: seguimientoUrl,
       Accept: "application/json, text/javascript, */*; q=0.01",
